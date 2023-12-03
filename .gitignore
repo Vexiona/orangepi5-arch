@@ -2,3 +2,4 @@ out
 *.git
 .env
 toolchain-vendor
+build
