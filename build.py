@@ -1,6 +1,10 @@
 import subprocess as sp
 import os
 import re
+from git import Repo
+from pathlib import Path
+from shutil import rmtree
+import hashlib
 
 REPOS = {
     'u-boot-vendor': {
@@ -28,64 +32,47 @@ start=64, size=32704, type=8DA63339-0007-60C0-C436-083AC8230908, name="uboot"
     }
 }
 
-TOOLCHAIN_VENDOR='gcc-linaro-7.4.1-2019.02-x86_64_aarch64-linux-gnu'
+TOOLCHAIN_NAME = 'gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu'
+TOOLCHAIN_URL = 'https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/'
 
-MIRROR_ARMBIAN='https://redirect.armbian.com'
+OUT_PATH = 'rkloaders'
 
-def init_repo(dir, url, branch = '*'):
-    sp.run(['rm', '-rf', dir])
-    # sp.run(['mkdir', dir])
-    sp.run(['git', 'clone', '--bare', url, dir])
-#     sp.run(['mkdir', os.path.join(dir, 'objects')])
-#     sp.run(['mkdir', os.path.join(dir, 'refs')])
-#     with open(os.path.join(dir, 'HEAD'), 'w') as f:
-#         f.write('ref: refs/heads/' + branch)
-#     with open(os.path.join(dir, 'config'), 'w') as f:
-#         f.write(f"""[core]
-# \trepositoryformatversion = 0
-# \tfilemode = true
-# \tbare = true
-# [remote "origin"]
-# \turl = {url}
-# \tfetch = +refs/heads/{branch}:refs/heads/{branch}
-# """)
-
-def update_repo(dir, url, branch):
-    if not os.path.isdir(dir):
-        init_repo(dir, url, branch)
-    print(f"Updating local git '{dir}' from '{url}'")
-    sp.run(['git', '--git-dir', dir, 'remote', 'update', '--prune'])
+def update_repo(dir, url):
+    try:
+        repo = Repo(dir)
+        print(f"Updating local git '{dir}' from '{url}'")
+        repo.remote().fetch(prune=True) #update remote/origin
+    except:
+        rmtree(project_path / dir, ignore_errors=True)
+        print(f"Cloning into '{dir} from '{url}")
+        repo = Repo.clone_from(url, dir, mirror=True)
 
 def update_all_repos():
     for repo, data in REPOS.items():
-        update_repo(repo + '.git', data['url'], data['branch'])
+        update_repo(repo + '.git', data['url'])
 
 def deploy_toolchain_vendor():
     if os.path.isdir('toolchain-vendor'):
         print('Toolchain exists. Reusing')
         return
-    print(f'Deploying toolchain {TOOLCHAIN_VENDOR}')
-    sp.run(['rm', '-rf', 'toolchain-vendor.temp'])
-    sp.run(['mkdir', 'toolchain-vendor.temp'])
-    sp.run(['wget', f'{MIRROR_ARMBIAN}/_toolchain/{TOOLCHAIN_VENDOR}.tar.xz', '-O', 'toolchain.tar.xz'])
-    print('Extracting toolchain')
-    sp.run(['tar', '-C', 'toolchain-vendor.temp', '--strip-components', '1', '-xJf', 'toolchain.tar.xz'])
-    print('Done: Extracting toolchain')
-    sp.run(['rm', '-vf', 'toolchain.tar.xz'])
-    sp.run(['mv', 'toolchain-vendor.temp', 'toolchain-vendor'])
-    print(f'Done: Deploying toolchain {TOOLCHAIN_VENDOR}')
+    print(f'Deploying toolchain {TOOLCHAIN_NAME}')
+    rmtree(project_path / 'toolchain-vendor.temp', ignore_errors=True)
+    (project_path / 'toolchain-vendor.temp').mkdir()
+    assert sp.run(['wget', f'{TOOLCHAIN_URL}{TOOLCHAIN_NAME}.tar.xz', '-O', 'toolchain.tar.xz']).returncode == 0
+    assert sp.run(['tar', '-C', 'toolchain-vendor.temp', '--strip-components', '1', '-xJf', 'toolchain.tar.xz']).returncode == 0
+    (project_path / 'toolchain.tar.xz').unlink(missing_ok=True)
+    (project_path / 'toolchain-vendor.temp').rename('toolchain-vendor')
 
 def prepare_rkbin():
-    sp.run(['rm', '-rf', 'rkbin'])
-    sp.run(['mkdir', 'rkbin'])
-    sp.run(['git', '--git-dir', 'rkbin.git', '--work-tree', 'rkbin', 'checkout', '-f', 'master'])
+    rmtree(project_path / 'rkbin', ignore_errors=True)
+    Repo(project_path / 'rkbin.git').clone(project_path / 'rkbin', depth=1, branch='master')
 
 def find_latest_binaries():
     bl31 = None
     ddr = None
     re_bl31 = re.compile('rk3588_bl31_.*')
     re_ddr = re.compile('rk3588_ddr_lp4_2112MHz_lp5_2736MHz_.*')
-    for binary in sorted(os.listdir('rkbin/rk35'), reverse = True):
+    for binary in sorted(os.listdir('rkbin/rk35'), reverse=True):
         if bl31 == None:
             bl31 = re.match(re_bl31, binary)
         if ddr == None:
@@ -98,64 +85,80 @@ def find_latest_binaries():
     }
 
 def build_common(type, config, binaries):
-    branch = REPOS['u-boot-' + type]['branch']
+    uboot_repo_name = f'u-boot-{type}'
+    branch = REPOS[uboot_repo_name]['branch']
     output_archive_name = f"rkloader_{type}_{branch}_{config}"
     output_archive_name += '_bl31_' + binaries['BL31'].split('_')[-1].removesuffix('.elf')
     output_archive_name += '_ddr_' + binaries['DDR'].split('_')[-1].removesuffix('.bin')
-    with open('out/list', 'a') as f:
-        f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
-    output_archive_path = 'out/' + output_archive_name + '.img'
+    output_archive_path = project_path / OUT_PATH / f'{output_archive_name}.img'
     report_name=f'u-boot ({type}) for {config}'
-    if os.path.isfile(output_archive_path + '.gz'):
+    with open(project_path / OUT_PATH / 'list', 'a') as f:
+        f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
+    if os.path.isfile(project_path / OUT_PATH / f'{output_archive_name}.img.gz'):
         print(f'Skipped building {report_name}')
-        return None 
-    sp.run(['mkdir', 'build'])
-    sp.run(['git', '--git-dir', f'u-boot-{type}.git', '--work-tree', 'build', 'checkout', '-f', branch])
+        return
+    Repo(project_path / f'{uboot_repo_name}.git').clone(project_path / 'build', depth=1, branch=branch)
     print(f'Configuring {report_name}')
-    sp.run(['make', '-C', 'build', f'{config}_defconfig'])
+    assert sp.run(['make', '-C', 'build', f'{config}_defconfig']).returncode == 0
     print(f'Building {report_name}')
-    sp.run(['rm', '-vf', output_archive_path])
+    output_archive_path.unlink(missing_ok=True)
     match type:
         case 'vendor':
-            sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
-                   env={**os.environ, 'BL31':f"rkbin/rk35/{binaries['BL31']}",
-                        'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'})
-            sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
-                    '-d', f"rkbin/rk35/{binaries['DDR']}",
-                    'build/idbloader.img'])
-            sp.run(['truncate', '-s', '4M', output_archive_path])
+            assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
+                          env={**os.environ, 'BL31':f"rkbin/rk35/{binaries['BL31']}",
+                               'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
+            assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
+                           '-d', f"rkbin/rk35/{binaries['DDR']}",
+                           'build/idbloader.img']).returncode == 0
+            assert sp.run(['truncate', '-s', '4M', output_archive_path]).returncode == 0
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
-            proc.communicate(REPOS['u-boot-' + type]['gpt'])
-            sp.run(['dd', 'if=build/idbloader.img', f'of={output_archive_path}', 'seek=64', 'conv=notrunc'])
-            sp.run(['dd', 'if=build/u-boot.itb', f'of={output_archive_path}', 'seek=1024', 'conv=notrunc'])
+            proc.communicate(REPOS[uboot_repo_name]['gpt'])
+            assert proc.wait() == 0
+            assert sp.run(['dd', 'if=build/idbloader.img', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
+            assert sp.run(['dd', 'if=build/u-boot.itb', f'of={output_archive_path}', 'seek=1024', 'conv=notrunc']).returncode == 0
         case 'mainline':
-            sp.run(['make', '-C', 'build', '-j', str(os.cpu_count())], 
-                   env={**os.environ, 
-                        'BL31':os.path.abspath(f"rkbin/rk35/{binaries['BL31']}"), 
-                        'ROCKCHIP_TPL':os.path.abspath(f"rkbin/rk35/{binaries['DDR']}"),
-                        'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'})
-            sp.run(['truncate', '-s', '17M', output_archive_path])
+            assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count())], 
+                          env={**os.environ, 
+                               'BL31':os.path.abspath(f"rkbin/rk35/{binaries['BL31']}"), 
+                               'ROCKCHIP_TPL':os.path.abspath(f"rkbin/rk35/{binaries['DDR']}"),
+                               'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
+            assert sp.run(['truncate', '-s', '17M', output_archive_path]).returncode == 0
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
-            proc.communicate(REPOS['u-boot-' + type]['gpt'])
-            sp.run(['dd', 'if=build/u-boot-rockchip.bin', f'of={output_archive_path}', 'seek=64', 'conv=notrunc'])
-    sp.run(['gzip', '-9', '--force', '--suffix', '.gz', output_archive_path])
-    sp.run(['rm', '-rf', 'build'])
+            proc.communicate(REPOS[uboot_repo_name]['gpt'])
+            assert proc.wait() == 0
+            assert sp.run(['dd', 'if=build/u-boot-rockchip.bin', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
+    assert sp.run(['gzip', '-9', '--force', '--suffix', '.gz', output_archive_path]).returncode == 0
+    rmtree(project_path / 'build')
 
 def build_all():
-    sp.run(['rm', '-rf', 'build', 'out/list'])
-    sp.run(['mkdir', '-p', 'out'])
+    rmtree(project_path / 'build', ignore_errors=True)
+    (project_path / OUT_PATH / 'list').unlink(missing_ok=True)
+    (project_path / OUT_PATH).mkdir(exist_ok=True)
     binaries = find_latest_binaries()
     for config in REPOS['u-boot-mainline']['board-configs']:
         build_common('mainline', config, binaries)
     for config in REPOS['u-boot-vendor']['board-configs']:
         build_common('vendor', config, binaries)
-    sp.run(['rm', '-rf', 'rkbin'])
+    rmtree(project_path / 'rkbin')
+    
+def checksums():
+    sums = ''
+    list_file = open(f'{OUT_PATH}/list', 'r')
+    for line in list_file.read().splitlines():
+        file_name = line.split(':')[2]
+        with open(project_path / OUT_PATH / file_name, 'rb') as file:
+            sums += f"{hashlib.file_digest(file, 'sha512').hexdigest()} {file_name}\n"
+    with open(project_path / OUT_PATH / 'sha512sums', 'w') as file:
+        file.write(sums)
 
 def main():
+    global project_path
+    project_path = Path(__file__).parent
     update_all_repos()
     deploy_toolchain_vendor()
     prepare_rkbin()
     build_all()
+    checksums()
 
 if __name__ == '__main__':
     main()
