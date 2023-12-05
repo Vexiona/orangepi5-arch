@@ -67,29 +67,12 @@ def prepare_rkbin():
     rmtree(project_path / 'rkbin', ignore_errors=True)
     Repo(project_path / 'rkbin.git').clone(project_path / 'rkbin', depth=1, branch='master')
 
-def find_latest_binaries():
-    bl31 = None
-    ddr = None
-    re_bl31 = re.compile('rk3588_bl31_.*')
-    re_ddr = re.compile('rk3588_ddr_lp4_2112MHz_lp5_2736MHz_.*')
-    for binary in sorted(os.listdir('rkbin/rk35'), reverse=True):
-        if bl31 == None:
-            bl31 = re.match(re_bl31, binary)
-        if ddr == None:
-            ddr = re.match(re_ddr, binary)
-    bl31 = bl31.group(0)
-    ddr = ddr.group(0)
-    return {
-        'BL31': bl31,
-        'DDR': ddr
-    }
-
 def build_common(type, config, binaries):
     uboot_repo_name = f'u-boot-{type}'
     branch = REPOS[uboot_repo_name]['branch']
     output_archive_name = f"rkloader_{type}_{branch}_{config}"
-    output_archive_name += '_bl31_' + binaries['BL31'].split('_')[-1].removesuffix('.elf')
-    output_archive_name += '_ddr_' + binaries['DDR'].split('_')[-1].removesuffix('.bin')
+    output_archive_name += '_bl31_' + binaries['BL31'].stem.split('_')[-1]
+    output_archive_name += '_ddr_' + binaries['DDR'].stem.split('_')[-1]
     output_archive_path = project_path / OUT_PATH / f'{output_archive_name}.img'
     report_name=f'u-boot ({type}) for {config}'
     with open(project_path / OUT_PATH / 'list', 'a') as f:
@@ -105,10 +88,10 @@ def build_common(type, config, binaries):
     match type:
         case 'vendor':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
-                          env={**os.environ, 'BL31':Path(f"rkbin/rk35/{binaries['BL31']}").resolve().as_posix(),
+                          env={**os.environ, 'BL31':binaries['BL31'].as_posix(),
                                'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
             assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
-                           '-d', Path(f"rkbin/rk35/{binaries['DDR']}").resolve().as_posix() + ":build/spl/u-boot-spl.bin",
+                           '-d', binaries['DDR'].as_posix() + ":build/spl/u-boot-spl.bin",
                            'build/idbloader.img'])
             assert sp.run(['truncate', '-s', '4M', output_archive_path]).returncode == 0
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
@@ -119,8 +102,8 @@ def build_common(type, config, binaries):
         case 'mainline':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count())], 
                           env={**os.environ, 
-                               'BL31':os.path.abspath(f"rkbin/rk35/{binaries['BL31']}"), 
-                               'ROCKCHIP_TPL':os.path.abspath(f"rkbin/rk35/{binaries['DDR']}"),
+                               'BL31':binaries['BL31'].as_posix(), 
+                               'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
                                'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
             assert sp.run(['truncate', '-s', '17M', output_archive_path]).returncode == 0
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
@@ -134,7 +117,11 @@ def build_all():
     rmtree(project_path / 'build', ignore_errors=True)
     (project_path / OUT_PATH / 'list').unlink(missing_ok=True)
     (project_path / OUT_PATH).mkdir(exist_ok=True)
-    binaries = find_latest_binaries()
+    # get absolute paths to the latest versions of BL31 and DDR
+    binaries = {
+        'BL31': sorted(Path('rkbin/rk35').glob('rk3588_bl31_*'), reverse=True)[0].resolve(),
+        'DDR': sorted(Path('rkbin/rk35').glob('rk3588_ddr_lp4_2112MHz_lp5_2736MHz_*'), reverse=True)[0].resolve()
+    }
     for config in REPOS['u-boot-mainline']['board-configs']:
         build_common('mainline', config, binaries)
     for config in REPOS['u-boot-vendor']['board-configs']:
