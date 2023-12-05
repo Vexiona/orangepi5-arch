@@ -52,7 +52,7 @@ def update_all_repos():
         update_repo(repo + '.git', data['url'])
 
 def deploy_toolchain_vendor():
-    if os.path.isdir('toolchain-vendor'):
+    if Path('toolchain-vendor').is_dir():
         print('Toolchain exists. Reusing')
         return
     print(f'Deploying toolchain {TOOLCHAIN_NAME}')
@@ -77,7 +77,7 @@ def build_common(type, config, binaries):
     report_name=f'u-boot ({type}) for {config}'
     with open(project_path / OUT_PATH / 'list', 'a') as f:
         f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
-    if os.path.isfile(project_path / OUT_PATH / f'{output_archive_name}.img.gz'):
+    if (project_path / OUT_PATH / f'{output_archive_name}.img.gz').is_dir():
         print(f'Skipped building {report_name}')
         return
     Repo(project_path / f'{uboot_repo_name}.git').clone(project_path / 'build', depth=1, branch=branch)
@@ -93,7 +93,8 @@ def build_common(type, config, binaries):
             assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
                            '-d', binaries['DDR'].as_posix() + ":build/spl/u-boot-spl.bin",
                            'build/idbloader.img'])
-            assert sp.run(['truncate', '-s', '4M', output_archive_path]).returncode == 0
+            with open(output_archive_path, 'wb') as file:
+                file.truncate(4 * 1024 * 1024)
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
             proc.communicate(REPOS[uboot_repo_name]['gpt'])
             assert proc.wait() == 0
@@ -105,7 +106,8 @@ def build_common(type, config, binaries):
                                'BL31':binaries['BL31'].as_posix(), 
                                'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
                                'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
-            assert sp.run(['truncate', '-s', '17M', output_archive_path]).returncode == 0
+            with open(output_archive_path, 'wb') as file:
+                file.truncate(17 * 1024 * 1024)
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
             proc.communicate(REPOS[uboot_repo_name]['gpt'])
             assert proc.wait() == 0
