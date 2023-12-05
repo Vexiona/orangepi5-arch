@@ -169,46 +169,46 @@ config_repos() {
 
 prepare_host_dirs() {
     rm -rf cache
-    mkdir -p {bin,cache/{rkloader,root},out,src/{rkloader,pkg}}
+    mkdir -p {bin,cache/{rkloader,root},out,{rkloader,pkg}}
 }
 
 get_rkloaders() {
-    local rkloader_parent=https://github.com/7Ji/orangepi5-rkloader/releases/download/nightly
-    if [[ "${freeze_rkloaders}" && -f src/rkloader/list && -f src/rkloader/sha256sums ]]; then
-        cp src/rkloader/{list,sha256sums} cache/rkloader/
-    else
-        dl "${rkloader_parent}"/sha256sums cache/rkloader/sha256sums
-        dl "${rkloader_parent}"/list cache/rkloader/list
-    fi
-    local sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+list$/\1/p' cache/rkloader/sha256sums)
-    if [[ $(sha256sum cache/rkloader/list | cut -d ' ' -f 1) !=  "${sum}" ]]; then
-        echo 'ERROR: list sha256sum not right'
-        false
-    fi
-    local rkloader model name
-    rkloaders=($(<cache/rkloader/list))
-    for rkloader in "${rkloaders[@]}"; do
-        name="${rkloader##*:}"
-        sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+'${name}'$/\1/p' cache/rkloader/sha256sums)
-        cp {src,cache}/rkloader/"${name}" || true
-        if [[ $(sha256sum cache/rkloader/"${name}" | cut -d ' ' -f 1) ==  "${sum}" ]]; then
-            continue
-        fi
-        dl "${rkloader_parent}/${name}" cache/rkloader/"${name}".temp
-        if [[ $(sha256sum cache/rkloader/"${name}".temp | cut -d ' ' -f 1) ==  "${sum}" ]]; then
-            mv cache/rkloader/"${name}"{.temp,}
-        else
-            echo "ERROR: Downloaded rkloader '${name}' is corrupted"
-            false
-        fi
-    done
-    rm -rf src/rkloader
-    mkdir src/rkloader
-    mv cache/rkloader/{list,sha256sums} src/rkloader/
-    for rkloader in "${rkloaders[@]}"; do
-        name="${rkloader##*:}"
-        mv {cache,src}/rkloader/"${name}"
-    done
+    # local rkloader_parent=https://github.com/7Ji/orangepi5-rkloader/releases/download/nightly
+    # if [[ "${freeze_rkloaders}" && -f rkloader/list && -f rkloader/sha256sums ]]; then
+    #     cp rkloader/{list,sha256sums} cache/rkloader/
+    # else
+    #     dl "${rkloader_parent}"/sha256sums cache/rkloader/sha256sums
+    #     dl "${rkloader_parent}"/list cache/rkloader/list
+    # fi
+    # local sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+list$/\1/p' cache/rkloader/sha256sums)
+    # if [[ $(sha256sum cache/rkloader/list | cut -d ' ' -f 1) !=  "${sum}" ]]; then
+    #     echo 'ERROR: list sha256sum not right'
+    #     false
+    # fi
+    # local rkloader model name
+    rkloaders=($(<rkloader/list))
+    # for rkloader in "${rkloaders[@]}"; do
+    #     name="${rkloader##*:}"
+    #     sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+'${name}'$/\1/p' cache/rkloader/sha256sums)
+    #     cp {,cache/}rkloader/"${name}" || true
+    #     if [[ $(sha256sum cache/rkloader/"${name}" | cut -d ' ' -f 1) ==  "${sum}" ]]; then
+    #         continue
+    #     fi
+    #     dl "${rkloader_parent}/${name}" cache/rkloader/"${name}".temp
+    #     if [[ $(sha256sum cache/rkloader/"${name}".temp | cut -d ' ' -f 1) ==  "${sum}" ]]; then
+    #         mv cache/rkloader/"${name}"{.temp,}
+    #     else
+    #         echo "ERROR: Downloaded rkloader '${name}' is corrupted"
+    #         false
+    #     fi
+    # done
+    # rm -rf rkloader
+    # mkdir rkloader
+    # mv cache/rkloader/{list,sha256sums} rkloader/
+    # for rkloader in "${rkloaders[@]}"; do
+    #     name="${rkloader##*:}"
+    #     mv {cache/,}rkloader/"${name}"
+    # done
 }
 
 prepare_pacman_static() {
@@ -250,7 +250,7 @@ prepare_pacman_configs() {
     pacman_config="
 RootDir      = cache/root
 DBPath       = cache/root/var/lib/pacman/
-CacheDir     = src/pkg/
+CacheDir     = pkg/
 LogFile      = cache/root/var/log/pacman.log
 GPGDir       = cache/root/etc/pacman.d/gnupg/
 HookDir      = cache/root/etc/pacman.d/hooks/
@@ -472,7 +472,7 @@ ${spart_root}"
         temp_image="${image}".temp
         # Use cp as it could reflink if the fs supports it
         cp "${base_image}" "${temp_image}"
-        gzip -cdk src/rkloader/"${name}" | dd of="${temp_image}" conv=notrunc
+        gzip -cdk rkloader/"${name}" | dd of="${temp_image}" conv=notrunc
         sfdisk "${temp_image}" <<< "${table}"
         case ${model#orangepi_} in
         5b)
@@ -504,8 +504,8 @@ release() {
     rm -rf out/latest
     mkdir out/latest
     for suffix in "${suffixes[@]}"; do
-        gzip -9 out/"${build_id}-${suffix}" &
-        pids_gzip+=($!)
+        # gzip -9 out/"${build_id}-${suffix}" &
+        # pids_gzip+=($!)
         ln -s ../"${build_id}-${suffix}".gz out/latest/
     done
     echo "Waiting for gzip processes to end..."

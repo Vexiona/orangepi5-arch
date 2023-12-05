@@ -105,11 +105,11 @@ def build_common(type, config, binaries):
     match type:
         case 'vendor':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
-                          env={**os.environ, 'BL31':f"rkbin/rk35/{binaries['BL31']}",
+                          env={**os.environ, 'BL31':Path(f"rkbin/rk35/{binaries['BL31']}").resolve().as_posix(),
                                'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
             assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
-                           '-d', f"rkbin/rk35/{binaries['DDR']}",
-                           'build/idbloader.img']).returncode == 0
+                           '-d', Path(f"rkbin/rk35/{binaries['DDR']}").resolve().as_posix() + ":build/spl/u-boot-spl.bin",
+                           'build/idbloader.img'])
             assert sp.run(['truncate', '-s', '4M', output_archive_path]).returncode == 0
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
             proc.communicate(REPOS[uboot_repo_name]['gpt'])

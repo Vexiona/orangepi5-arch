@@ -3,3 +3,7 @@ rkloaders
 .env
 toolchain-vendor
 build
+
+bin
+pkg
+out
