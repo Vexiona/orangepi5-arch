@@ -18,8 +18,6 @@ Build ArchLinux ARM images on an x86_64 host, rootless
   --uuid-root <uuid>        uuid to be used for root ext4 fs
   --uuid-boot <uuid>        uuid to be used for boot fat32 fs, only first 8 chars used
   --build-id <id>           a string id for the build
-  --freeze-rkloader         freeze versions of rkloader and do not update them
-  --local-mirror            download pkgs from a local pacoloco mirror
   --help                    print this message and early quit
 
 WARNING: CLI arguments are mostly for internal usage, you should not rely on its behaviour
@@ -103,13 +101,6 @@ cleanup_child() {
     reap_children -9
 }
 
-pacman_could_retry() {
-    if ! bin/pacman "$@"; then
-        echo "Warning: pacman command failed to execute correctly, retry once"
-        bin/pacman "$@"
-    fi
-}
-
 get_uid_gid() {
     uid=$(id --user)
     gid=$(id --group)
@@ -148,17 +139,10 @@ check_identity_map_root() {
 }
 
 config_repos() {
-    if [[ "${pkg_from_local_mirror}" ]]; then
-        mirror_archlinux=${mirror_archlinux:-http://repo.lan:9129/repo/archlinux}
-        mirror_archlinuxarm=${mirror_alarm:-http://repo.lan:9129/repo/archlinuxarm}
-        mirror_archlinuxcn=${mirror_archlinuxcn:-http://repo.lan:9129/repo/archlinuxcn_x86_64}
-        mirror_7Ji=${mirror_7Ji:-http://repo.lan/github-mirror}
-    else
-        mirror_archlinux=${mirror_archlinux:-https://geo.mirror.pkgbuild.com}
-        mirror_archlinuxarm=${mirror_alarm:-http://mirror.archlinuxarm.org}
-        mirror_archlinuxcn=${mirror_archlinuxcn:-https://opentuna.cn/archlinuxcn}
-        mirror_7Ji=${mirror_7Ji:-https://github.com/7Ji/archrepo/releases/download}
-    fi
+    mirror_archlinux=${mirror_archlinux:-https://geo.mirror.pkgbuild.com}
+    mirror_archlinuxarm=${mirror_alarm:-http://mirror.archlinuxarm.org}
+    mirror_archlinuxcn=${mirror_archlinuxcn:-https://opentuna.cn/archlinuxcn}
+    mirror_7Ji=${mirror_7Ji:-https://github.com/7Ji/archrepo/releases/download}
     # Mainly for pacman-static
     repo_url_archlinuxcn_x86_64="${mirror_archlinuxcn}"/x86_64
     # For base system packages
@@ -169,46 +153,24 @@ config_repos() {
 
 prepare_host_dirs() {
     rm -rf cache
-    mkdir -p {bin,cache/{rkloader,root},out,{rkloader,pkg}}
+    mkdir -p {bin,cache/root,out,pkg}
 }
 
 get_rkloaders() {
-    # local rkloader_parent=https://github.com/7Ji/orangepi5-rkloader/releases/download/nightly
-    # if [[ "${freeze_rkloaders}" && -f rkloader/list && -f rkloader/sha256sums ]]; then
-    #     cp rkloader/{list,sha256sums} cache/rkloader/
-    # else
-    #     dl "${rkloader_parent}"/sha256sums cache/rkloader/sha256sums
-    #     dl "${rkloader_parent}"/list cache/rkloader/list
-    # fi
-    # local sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+list$/\1/p' cache/rkloader/sha256sums)
-    # if [[ $(sha256sum cache/rkloader/list | cut -d ' ' -f 1) !=  "${sum}" ]]; then
-    #     echo 'ERROR: list sha256sum not right'
-    #     false
-    # fi
+    local sum=$(sed -n 's/\(^[0-9a-f]\{128\}\) \+list$/\1/p' rkloader/sha512sums)
+    if [[ $(sha512sum rkloader/list | cut -d ' ' -f 1) !=  "${sum}" ]]; then
+        echo 'ERROR: list sha512sum not right'
+        false
+    fi
     # local rkloader model name
     rkloaders=($(<rkloader/list))
-    # for rkloader in "${rkloaders[@]}"; do
-    #     name="${rkloader##*:}"
-    #     sum=$(sed -n 's/\(^[0-9a-f]\{64\}\) \+'${name}'$/\1/p' cache/rkloader/sha256sums)
-    #     cp {,cache/}rkloader/"${name}" || true
-    #     if [[ $(sha256sum cache/rkloader/"${name}" | cut -d ' ' -f 1) ==  "${sum}" ]]; then
-    #         continue
-    #     fi
-    #     dl "${rkloader_parent}/${name}" cache/rkloader/"${name}".temp
-    #     if [[ $(sha256sum cache/rkloader/"${name}".temp | cut -d ' ' -f 1) ==  "${sum}" ]]; then
-    #         mv cache/rkloader/"${name}"{.temp,}
-    #     else
-    #         echo "ERROR: Downloaded rkloader '${name}' is corrupted"
-    #         false
-    #     fi
-    # done
-    # rm -rf rkloader
-    # mkdir rkloader
-    # mv cache/rkloader/{list,sha256sums} rkloader/
-    # for rkloader in "${rkloaders[@]}"; do
-    #     name="${rkloader##*:}"
-    #     mv {cache/,}rkloader/"${name}"
-    # done
+    for rkloader in "${rkloaders[@]}"; do
+        name="${rkloader##*:}"
+        sum=$(sed -n 's/\(^[0-9a-f]\{128\}\) \+'${name}'$/\1/p' rkloader/sha512sums)
+        if [[ ! ($(sha512sum rkloader/"${name}" | cut -d ' ' -f 1) ==  "${sum}") ]]; then
+            false
+        fi
+    done
 }
 
 prepare_pacman_static() {
@@ -284,7 +246,7 @@ disable_network() {
 }
 
 bootstrap_root() {
-    pacman_could_retry -Sy --config cache/pacman-loose.conf --noconfirm "${install_pkgs_bootstrap[@]}"
+    bin/pacman -Sy --config cache/pacman-loose.conf --noconfirm "${install_pkgs_bootstrap[@]}"
     echo '[7Ji]
 Server = https://github.com/7Ji/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
     enable_network
@@ -303,7 +265,7 @@ install_mkinitcpio() {
     # We then compress the initcpio on host.
     # This avoids the performance penalty if mkinitcpio runs with compression in
     # target, as qemu is not that efficient
-    pacman_could_retry -S --config cache/pacman-strict.conf --noconfirm mkinitcpio
+    bin/pacman -S --config cache/pacman-strict.conf --noconfirm mkinitcpio
     local mkinitcpio_conf=cache/root/etc/mkinitcpio.conf
     cp "${mkinitcpio_conf}"{,.pacsave}
     echo 'COMPRESSION=cat' >> "${mkinitcpio_conf}"
@@ -361,7 +323,7 @@ setup_extlinux() {
 }
 
 install_pkgs() {
-    pacman_could_retry -S --config cache/pacman-strict.conf --noconfirm "${install_pkgs_kernel[@]}" "${install_pkgs_normal[@]}"
+    bin/pacman -S --config cache/pacman-strict.conf --noconfirm "${install_pkgs_kernel[@]}" "${install_pkgs_normal[@]}"
 }
 
 cleanup_pkgs() {
@@ -414,19 +376,24 @@ archive_root() {
 
 set_parts() {
     spart_label='gpt'
+    # lba size=17K
     spart_firstlba='34'
+    # start=32K
     spart_idbloader='start=64, size=960, type=8DA63339-0007-60C0-C436-083AC8230908, name="idbloader"'
+    # start=512K
     spart_uboot='start=1024, size=6144, type=8DA63339-0007-60C0-C436-083AC8230908, name="uboot"'
     spart_size_all=2048
     spart_off_boot=4
     spart_size_boot=256
     local skt_off_boot=$(( ${spart_off_boot} * 2048 ))
     local skt_size_boot=$(( ${spart_size_boot} * 2048 ))
+    # start=4M size=256M
     spart_boot='start='"${skt_off_boot}"', size='"${skt_size_boot}"', type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="alarmboot"'
     spart_off_root=$(( ${spart_off_boot} + ${spart_size_boot} ))
     spart_size_root=$((  ${spart_size_all} - 1 - ${spart_off_root} ))
     local skt_off_root=$(( ${spart_off_root} * 2048 ))
     local skt_size_root=$(( ${spart_size_root} * 2048 ))
+    # start=(4+256)M=260M size=2048-1-260=1787M end=2048
     spart_root='start='"${skt_off_root}"', size='"${skt_size_root}"', type=B921B045-1DF0-41C3-AF44-4C6F280D3FAE, name="alarmroot"'
 }
 
@@ -618,7 +585,7 @@ work_parent() {
     image_disk
     image_rkloader
     release
-    cleanup_cache
+    # cleanup_cache
 }
 
 work_child() {
@@ -638,7 +605,7 @@ work_child() {
     archive_root
     set_parts
     image_boot
-    cleanup_boot
+    # cleanup_boot
     image_root
 }
 
@@ -692,12 +659,6 @@ while [[ $i -lt ${argc} ]]; do
         --rkloader)
             i=$(( $i + 1 ))
             rkloaders+=("${argv[$i]}")
-            ;;
-        --freeze-rkloader)
-            freeze_rkloaders='yes'
-            ;;
-        --local-mirror)
-            pkg_from_local_mirror='yes'
             ;;
         --help)
             help

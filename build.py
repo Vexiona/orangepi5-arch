@@ -1,10 +1,10 @@
 import subprocess as sp
 import os
-import re
 from git import Repo
 from pathlib import Path
 from shutil import rmtree
 import hashlib
+import tarfile
 
 REPOS = {
     'u-boot-vendor': {
@@ -51,7 +51,7 @@ def update_all_repos():
     for repo, data in REPOS.items():
         update_repo(repo + '.git', data['url'])
 
-def deploy_toolchain_vendor():
+def deploy_toolchain():
     if Path('toolchain-vendor').is_dir():
         print('Toolchain exists. Reusing')
         return
@@ -59,8 +59,9 @@ def deploy_toolchain_vendor():
     rmtree(project_path / 'toolchain-vendor.temp', ignore_errors=True)
     (project_path / 'toolchain-vendor.temp').mkdir()
     assert sp.run(['wget', f'{TOOLCHAIN_URL}{TOOLCHAIN_NAME}.tar.xz', '-O', 'toolchain.tar.xz']).returncode == 0
-    assert sp.run(['tar', '-C', 'toolchain-vendor.temp', '--strip-components', '1', '-xJf', 'toolchain.tar.xz']).returncode == 0
-    (project_path / 'toolchain.tar.xz').unlink(missing_ok=True)
+    with tarfile.open('toolchain.tar.xz', 'r:xz') as toolchain:
+        toolchain.extractall(project_path / 'toolchain-vendor.temp')
+    (project_path / 'toolchain.tar.xz').unlink()
     (project_path / 'toolchain-vendor.temp').rename('toolchain-vendor')
 
 def prepare_rkbin():
@@ -77,7 +78,7 @@ def build_common(type, config, binaries):
     report_name=f'u-boot ({type}) for {config}'
     with open(project_path / OUT_PATH / 'list', 'a') as f:
         f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
-    if (project_path / OUT_PATH / f'{output_archive_name}.img.gz').is_dir():
+    if (project_path / OUT_PATH / f'{output_archive_name}.img.gz').is_file():
         print(f'Skipped building {report_name}')
         return
     Repo(project_path / f'{uboot_repo_name}.git').clone(project_path / 'build', depth=1, branch=branch)
@@ -132,11 +133,13 @@ def build_all():
     
 def checksums():
     sums = ''
-    list_file = open(f'{OUT_PATH}/list', 'r')
-    for line in list_file.read().splitlines():
-        file_name = line.split(':')[2]
-        with open(project_path / OUT_PATH / file_name, 'rb') as file:
-            sums += f"{hashlib.file_digest(file, 'sha512').hexdigest()} {file_name}\n"
+    with open(project_path / OUT_PATH / 'list', 'rb') as list_file:
+        sums += f"{hashlib.file_digest(list_file, 'sha512').hexdigest()} list\n"
+    with open(project_path / OUT_PATH / 'list', 'r') as list_file:
+        for line in list_file.read().splitlines():
+            file_name = line.split(':')[2]
+            with open(project_path / OUT_PATH / file_name, 'rb') as file:
+                sums += f"{hashlib.file_digest(file, 'sha512').hexdigest()} {file_name}\n"
     with open(project_path / OUT_PATH / 'sha512sums', 'w') as file:
         file.write(sums)
 
@@ -144,7 +147,7 @@ def main():
     global project_path
     project_path = Path(__file__).parent
     update_all_repos()
-    deploy_toolchain_vendor()
+    deploy_toolchain()
     prepare_rkbin()
     build_all()
     checksums()

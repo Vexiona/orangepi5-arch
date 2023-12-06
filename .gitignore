@@ -4,6 +4,7 @@ rkloaders
 toolchain-vendor
 build
 
+rkloader
 bin
 pkg
 out
