@@ -585,7 +585,7 @@ work_parent() {
     image_disk
     image_rkloader
     release
-    # cleanup_cache
+    cleanup_cache
 }
 
 work_child() {
@@ -605,7 +605,7 @@ work_child() {
     archive_root
     set_parts
     image_boot
-    # cleanup_boot
+    cleanup_boot
     image_root
 }
 

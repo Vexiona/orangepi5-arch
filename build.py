@@ -52,17 +52,18 @@ def update_all_repos():
         update_repo(repo + '.git', data['url'])
 
 def deploy_toolchain():
-    if Path('toolchain-vendor').is_dir():
+    if Path('toolchain').is_dir():
         print('Toolchain exists. Reusing')
         return
     print(f'Deploying toolchain {TOOLCHAIN_NAME}')
-    rmtree(project_path / 'toolchain-vendor.temp', ignore_errors=True)
-    (project_path / 'toolchain-vendor.temp').mkdir()
+    rmtree(project_path / 'toolchain.temp', ignore_errors=True)
+    (project_path / 'toolchain.temp').mkdir()
     assert sp.run(['wget', f'{TOOLCHAIN_URL}{TOOLCHAIN_NAME}.tar.xz', '-O', 'toolchain.tar.xz']).returncode == 0
     with tarfile.open('toolchain.tar.xz', 'r:xz') as toolchain:
-        toolchain.extractall(project_path / 'toolchain-vendor.temp')
+        toolchain.extractall(project_path / 'toolchain.temp', filter='data')
     (project_path / 'toolchain.tar.xz').unlink()
-    (project_path / 'toolchain-vendor.temp').rename('toolchain-vendor')
+    (project_path / 'toolchain.temp' / TOOLCHAIN_NAME).rename(project_path / 'toolchain')
+    (project_path / 'toolchain.temp').rmdir()
 
 def prepare_rkbin():
     rmtree(project_path / 'rkbin', ignore_errors=True)
@@ -89,8 +90,10 @@ def build_common(type, config, binaries):
     match type:
         case 'vendor':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
-                          env={**os.environ, 'BL31':binaries['BL31'].as_posix(),
-                               'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
+                          env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
+                               'BL31':binaries['BL31'].as_posix(),
+                               'ARCH':'arm64', 
+                               'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
             assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
                            '-d', binaries['DDR'].as_posix() + ":build/spl/u-boot-spl.bin",
                            'build/idbloader.img'])
@@ -102,8 +105,8 @@ def build_common(type, config, binaries):
             assert sp.run(['dd', 'if=build/idbloader.img', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
             assert sp.run(['dd', 'if=build/u-boot.itb', f'of={output_archive_path}', 'seek=1024', 'conv=notrunc']).returncode == 0
         case 'mainline':
-            assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count())], 
-                          env={**os.environ, 
+            assert sp.run(['/usr/bin/make', '-C', 'build', '-j', str(os.cpu_count())], 
+                          env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
                                'BL31':binaries['BL31'].as_posix(), 
                                'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
                                'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
