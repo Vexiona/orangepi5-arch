@@ -24,53 +24,6 @@ WARNING: CLI arguments are mostly for internal usage, you should not rely on its
 WARNING: This script is written for Ubuntu22.04, the exact environment that Github Actions provide
 '
 }
-dl() { # 1: url 2: output
-    echo "Downloading '$2' <= '$1'" >&2
-    if [[ "$2" ]]; then
-        curl -qgb "" -fL --retry 3 --retry-delay 3 -o "$2" "$1"
-    else
-        curl -qgb "" -fL --retry 3 --retry-delay 3 "$1"
-    fi
-    echo "Downloaded '$2' <= '$1'" >&2
-}
-
-dump_binary_from_repo() { # 1: repo url, 2: repo name, 3: pkgname, 4: local bin, 5: source bin
-    dl "$1/$2".db cache/repo.db
-    local desc=$(tar -xOf cache/repo.db --wildcards "$3"'-*/desc')
-    local names=($(sed -n '/%NAME%/{n;p;}' <<< "${desc}"))
-    case ${#names[@]} in
-    0)
-        echo "Failed to find package '$3' in repo '$1"
-        return 1
-    ;;
-    1)
-        local ver=$(sed -n '/%VERSION%/{n;p;}' <<< "${desc}")
-        local pkg=$(sed -n '/%FILENAME%/{n;p;}' <<< "${desc}")
-    ;;
-    *)
-        local vers=($(sed -n '/%VERSION%/{n;p;}' <<< "${desc}"))
-        local pkgs=($(sed -n '/%FILENAME%/{n;p;}' <<< "${desc}"))
-        local id=0
-        local name
-        for name in "${names[@]}"; do
-            if [[ "${name}" == "$3" ]]; then
-                break
-            fi
-            local id=$(( id + 1 ))
-        done
-        local ver="${vers[${id}]}"
-        local pkg="${pkgs[${id}]}"
-    ;;
-    esac
-    if [[ ! -f bin/"$4-${ver}" ]]; then
-        rm bin/"$4"-* || true
-        dl "$1/${pkg}" cache/"${pkg}"
-        tar -xOf cache/"${pkg}" "$5" > bin/"$4-${ver}".temp
-        mv bin/"$4-${ver}"{.temp,}
-    fi
-    chmod +x bin/"$4-${ver}"
-    ln -sf "$4-${ver}" bin/"$4"
-}
 
 reap_children() { #1 kill arg
     local children child
@@ -141,10 +94,7 @@ check_identity_map_root() {
 config_repos() {
     mirror_archlinux=${mirror_archlinux:-https://geo.mirror.pkgbuild.com}
     mirror_archlinuxarm=${mirror_alarm:-http://mirror.archlinuxarm.org}
-    mirror_archlinuxcn=${mirror_archlinuxcn:-https://opentuna.cn/archlinuxcn}
     mirror_7Ji=${mirror_7Ji:-https://github.com/7Ji/archrepo/releases/download}
-    # Mainly for pacman-static
-    repo_url_archlinuxcn_x86_64="${mirror_archlinuxcn}"/x86_64
     # For base system packages
     repo_url_alarm_aarch64="${mirror_archlinuxarm}"/aarch64/'$repo'
     # For kernels and other stuffs
@@ -174,7 +124,8 @@ get_rkloaders() {
 }
 
 prepare_pacman_static() {
-    dump_binary_from_repo "${repo_url_archlinuxcn_x86_64}" archlinuxcn pacman-static pacman usr/bin/pacman-static 
+    cp "pacman/pacman-*" bin
+    ln -sf "pacman-6.0.1-49" pacman
 }
 
 mount_root() {
