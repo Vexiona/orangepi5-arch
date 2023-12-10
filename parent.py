@@ -60,14 +60,14 @@ def check_identity_non_root():
     assert os.getgid() != 0, 'Not allowed to run as GID = 0'
 
 def prepare_host_dirs():
-    rmtree(project_path / 'cache')
+    rmtree(project_path / 'cache', ignore_errors=True)
     (project_path / 'cache' / 'root').mkdir(parents=True)
     (project_path / 'out').mkdir(exist_ok=True)
     (project_path / 'pkg').mkdir(exist_ok=True)
 
 def get_rkloaders():
     with open(project_path / RKLOADERS_PATH / 'sha512sums', 'r') as sums_file:
-        sums_file_lines = sums_file.readlines()
+        sums_file_lines = sums_file.read().splitlines()
     sums_file_lines_split = sums_file_lines[0].split(' ')
     assert sums_file_lines_split[1] == 'list', 'List file checksum not found'
     with open(project_path / RKLOADERS_PATH / 'list', 'rb') as list_file:
@@ -90,7 +90,7 @@ LogFile      = cache/root/var/log/pacman.log
 GPGDir       = cache/root/etc/pacman.d/gnupg/
 HookDir      = cache/root/etc/pacman.d/hooks/
 Architecture = aarch64
-Siglevel     = {}''' + f'''
+SigLevel     = {}''' + f'''
 [core]
 Server = {MIRROR_ARCHLINUXARM}
 [extra]
@@ -100,7 +100,7 @@ Server = {MIRROR_ARCHLINUXARM}
 [aur]
 Server = {MIRROR_ARCHLINUXARM}
 [7Ji]
-Server = {MIRROR_ARCHLINUXARM}'''
+Server = {MIRROR_7JI}'''
     with open(project_path / 'cache' / 'pacman-loose.conf', 'w') as file:
         file.write(pacman_config.format('Never'))
     with open(project_path / 'cache' / 'pacman-strict.conf', 'w') as file:
@@ -109,9 +109,10 @@ Server = {MIRROR_ARCHLINUXARM}'''
 def image_disk():
     output_base_img_path = project_path / OUT_PATH / f'{build_id}-base.img'
     output_base_img_path.unlink(missing_ok=True)
-    os.truncate(output_base_img_path, spart_size_all * 1024 * 1024)
+    with open(output_base_img_path, 'wb') as file:
+        file.truncate(spart_size_all * 1024 * 1024)
     proc = sp.Popen(['sfdisk', output_base_img_path], stdin = sp.PIPE)
-    proc.communicate(f'''label: gpt'
+    proc.communicate(f'''label: gpt
 {spart_boot}
 {spart_root}'''.encode('ascii'))
     assert proc.wait() == 0
@@ -135,21 +136,22 @@ first-lba: {spart_firstlba}
         pattern_remove_overlay+=f';/^\tFDTOVERLAYS\t{kernel}$/d'
         pattern_set_overlay+=f';s|^\tFDTOVERLAYS\t{kernel}$|\tFDTOVERLAYS\t/dtbs/{kernel}/rockchip/overlay/rk3588-ssd-sata0.dtbo|'
     with open(project_path / RKLOADERS_PATH / 'list', 'r') as list_file:
-        list_lines = list_file.readlines()
+        list_lines = list_file.read().splitlines()
         for list_line in list_lines:
             list_line_split = list_line.split(':')
             if list_line_split[0] != 'vendor':
                 continue
             model = list_line_split[1]
             name = list_line_split[2]
+            rkloader_path = project_path / RKLOADERS_PATH / name
             suffix = f'rkloader-{model}.img'
-            suffixes += (suffix)
+            suffixes += (suffix, )
             output_image_path = project_path / OUT_PATH / f'{build_id}-{suffix}'
             temp_img_path = output_image_path.with_suffix('.temp')
             copy(output_base_img_path, temp_img_path)
-            assert sp.run(['gzip', '-dk', project_path / RKLOADERS_PATH / name, project_path / 'cache' / name]).returncode == 0
-            assert sp.run(['dd', f'if={project_path / 'cache' / name}', f'of={temp_img_path}', 'conv=notrunc']).returncode == 0
-            (project_path / 'cache' / name).unlink()
+            assert sp.run(['gzip', '-dk', rkloader_path]).returncode == 0
+            assert sp.run(['dd', f'if={rkloader_path}', f'of={temp_img_path}', 'conv=notrunc']).returncode == 0
+            (rkloader_path.with_suffix('')).unlink()
             proc = sp.Popen(['sfdisk', temp_img_path], stdin = sp.PIPE)
             proc.communicate(table)
             assert proc.wait() == 0
@@ -187,8 +189,8 @@ def spawn_and_wait():
     args = ['unshare', '--user', '--pid', '--mount', '--fork']
     args.extend(['--map-user=0', '--map-group=0', '--map-users=auto', '--map-groups=auto'])
     args.extend(['/bin/bash', '-e', './child.sh'])
-    args.extend(['--uuid-root', uuid_root])
-    args.extend(['--uuid-boot', uuid_boot])
+    args.extend(['--uuid-root', str(uuid_root)])
+    args.extend(['--uuid-boot', str(uuid_boot)])
     args.extend(['--build-id', build_id])
     for arg in install_pkgs_bootstrap:
         args.extend(['--install-bootstrap', arg])
@@ -196,7 +198,7 @@ def spawn_and_wait():
         args.extend(['--install', arg])
     for arg in install_pkgs_kernel:
         args.extend(['--install-kernel', arg])
-    sp.run(args)
+    assert sp.run(args).returncode == 0
 
 def set_parts():
     return 0
@@ -211,10 +213,10 @@ def cleanup_cache():
     rmtree(project_path / 'cache')
 
 def main():
-    try:
+    # try:
         global project_path
         project_path = Path(__file__).parent
-        signal.signal(signal.SIGINT, cleanup_parent)
+        # signal.signal(signal.SIGINT, cleanup_parent)
         check_identity_non_root()
         prepare_host()
         spawn_and_wait()
@@ -225,8 +227,9 @@ def main():
         image_rkloader()
         release()
         cleanup_cache()
-    finally:
-        cleanup_parent()
+    # finally:
+        # return 0
+        # cleanup_parent()
 
 if __name__ == '__main__':
     main()
