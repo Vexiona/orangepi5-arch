@@ -1,3 +1,38 @@
+reap_children() { #1 kill arg
+    local children child
+    local i=0
+    while [[ $i -lt 100 ]]; do
+        children=($(pgrep -P$$))
+        if [[ "${#children[@]}" -eq 1 ]]; then # Only pgrep
+            return
+        fi
+        for child in "${children[@]}"; do
+            kill "$@" "${child}" 2>/dev/null || true
+        done
+        i=$(( $i + 1 ))
+        sleep 1
+    done
+}
+
+cleanup_child() {
+    echo "=> Cleaning up before exiting (child)..."
+    mount proc /proc -t proc -o nosuid,noexec,nodev
+    reap_children -9
+}
+
+check_identity_root() {
+    uid=$(id --user)
+    gid=$(id --group)
+    if [[ "${uid}" != 0 ]]; then
+        echo "ERROR: Must run as root (UID = 0)"
+        exit 1
+    fi
+    if [[ "${gid}" != 0 ]]; then
+        echo "ERROR: Must run as GID = 0"
+        exit 1
+    fi
+}
+
 check_identity_map_root() {
     check_identity_root
     if touch /sys/sys_write_test; then
@@ -25,6 +60,15 @@ mount_root() {
     ln -s /proc/self/fd cache/root/dev/fd
     ln -s pts/ptmx cache/root/dev/ptmx
     ln -s $(readlink -f /dev/stdout) cache/root/dev/console
+}
+
+enable_network() {
+    cat /etc/resolv.conf > cache/resolv.conf
+    mount cache/resolv.conf cache/root/etc/resolv.conf -o bind
+}
+
+disable_network() {
+    umount cache/root/etc/resolv.conf
 }
 
 bootstrap_root() {
@@ -168,6 +212,7 @@ archive_root() {
 set_parts() {
     spart_size_all=2048
     spart_size_boot=256
+    spart_off_root=$(( ${spart_off_boot} + ${spart_size_boot} ))
     spart_size_root=$((  ${spart_size_all} - 1 - ${spart_off_root} ))
 }
 

@@ -1,11 +1,3 @@
-import subprocess as sp
-import os
-from git import Repo
-from pathlib import Path
-from shutil import rmtree
-import hashlib
-import tarfile
-
 reap_children() { #1 kill arg
     local children child
     local i=0
@@ -29,31 +21,9 @@ cleanup_parent() {
     reap_children
 }
 
-cleanup_child() {
-    echo "=> Cleaning up before exiting (child)..."
-    mount proc /proc -t proc -o nosuid,noexec,nodev
-    reap_children -9
-}
-
-get_uid_gid() {
+check_identity_non_root() {
     uid=$(id --user)
     gid=$(id --group)
-}
-
-check_identity_root() {
-    get_uid_gid
-    if [[ "${uid}" != 0 ]]; then
-        echo "ERROR: Must run as root (UID = 0)"
-        exit 1
-    fi
-    if [[ "${gid}" != 0 ]]; then
-        echo "ERROR: Must run as GID = 0"
-        exit 1
-    fi
-}
-
-check_identity_non_root() {
-    get_uid_gid
     if [[ "${uid}" == 0 ]]; then
         echo "ERROR: Not allowed to run as root (UID = 0)"
         exit 1
@@ -127,15 +97,6 @@ SigLevel = Never${pacman_mirrors}" > cache/pacman-loose.conf
 
     echo "[options]${pacman_config}
 SigLevel = DatabaseOptional${pacman_mirrors}" > cache/pacman-strict.conf
-}
-
-enable_network() {
-    cat /etc/resolv.conf > cache/resolv.conf
-    mount cache/resolv.conf cache/root/etc/resolv.conf -o bind
-}
-
-disable_network() {
-    umount cache/root/etc/resolv.conf
 }
 
 image_disk() {
