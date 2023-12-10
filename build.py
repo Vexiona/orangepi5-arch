@@ -35,7 +35,7 @@ start=64, size=32704, type=8DA63339-0007-60C0-C436-083AC8230908, name="uboot"
 TOOLCHAIN_NAME = 'gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu'
 TOOLCHAIN_URL = 'https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/'
 
-OUT_PATH = 'rkloaders'
+RKLOADERS_PATH = 'rkloaders'
 
 def update_repo(dir, url):
     try:
@@ -75,11 +75,11 @@ def build_common(type, config, binaries):
     output_archive_name = f"rkloader_{type}_{branch}_{config}"
     output_archive_name += '_bl31_' + binaries['BL31'].stem.split('_')[-1]
     output_archive_name += '_ddr_' + binaries['DDR'].stem.split('_')[-1]
-    output_archive_path = project_path / OUT_PATH / f'{output_archive_name}.img'
+    output_archive_path = project_path / RKLOADERS_PATH / f'{output_archive_name}.img'
     report_name=f'u-boot ({type}) for {config}'
-    with open(project_path / OUT_PATH / 'list', 'a') as f:
+    with open(project_path / RKLOADERS_PATH / 'list', 'a') as f:
         f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
-    if (project_path / OUT_PATH / f'{output_archive_name}.img.gz').is_file():
+    if (project_path / RKLOADERS_PATH / f'{output_archive_name}.img.gz').is_file():
         print(f'Skipped building {report_name}')
         return
     Repo(project_path / f'{uboot_repo_name}.git').clone(project_path / 'build', depth=1, branch=branch)
@@ -117,13 +117,14 @@ def build_common(type, config, binaries):
             proc.communicate(REPOS[uboot_repo_name]['gpt'])
             assert proc.wait() == 0
             assert sp.run(['dd', 'if=build/u-boot-rockchip.bin', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
+            
     assert sp.run(['gzip', '-9', '--force', '--suffix', '.gz', output_archive_path]).returncode == 0
     rmtree(project_path / 'build')
 
 def build_all():
     rmtree(project_path / 'build', ignore_errors=True)
-    (project_path / OUT_PATH / 'list').unlink(missing_ok=True)
-    (project_path / OUT_PATH).mkdir(exist_ok=True)
+    (project_path / RKLOADERS_PATH / 'list').unlink(missing_ok=True)
+    (project_path / RKLOADERS_PATH).mkdir(exist_ok=True)
     # get absolute paths to the latest versions of BL31 and DDR
     binaries = {
         'BL31': sorted(Path('rkbin/rk35').glob('rk3588_bl31_*'), reverse=True)[0].resolve(),
@@ -137,14 +138,14 @@ def build_all():
     
 def checksums():
     sums = ''
-    with open(project_path / OUT_PATH / 'list', 'rb') as list_file:
+    with open(project_path / RKLOADERS_PATH / 'list', 'rb') as list_file:
         sums += f"{hashlib.file_digest(list_file, 'sha512').hexdigest()} list\n"
-    with open(project_path / OUT_PATH / 'list', 'r') as list_file:
+    with open(project_path / RKLOADERS_PATH / 'list', 'r') as list_file:
         for line in list_file.read().splitlines():
             file_name = line.split(':')[2]
-            with open(project_path / OUT_PATH / file_name, 'rb') as file:
+            with open(project_path / RKLOADERS_PATH / file_name, 'rb') as file:
                 sums += f"{hashlib.file_digest(file, 'sha512').hexdigest()} {file_name}\n"
-    with open(project_path / OUT_PATH / 'sha512sums', 'w') as file:
+    with open(project_path / RKLOADERS_PATH / 'sha512sums', 'w') as file:
         file.write(sums)
 
 def main():

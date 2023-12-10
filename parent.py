@@ -2,339 +2,231 @@ import subprocess as sp
 import os
 from git import Repo
 from pathlib import Path
-from shutil import rmtree
+from shutil import rmtree, copy
 import hashlib
 import tarfile
+import multiprocessing as mp
+import signal
+import datetime
+import uuid
 
-reap_children() { #1 kill arg
-    local children child
-    local i=0
-    while [[ $i -lt 100 ]]; do
-        children=($(pgrep -P$$))
-        if [[ "${#children[@]}" -eq 1 ]]; then # Only pgrep
-            return
-        fi
-        for child in "${children[@]}"; do
-            kill "$@" "${child}" 2>/dev/null || true
-        done
-        i=$(( $i + 1 ))
-        sleep 1
-    done
-}
 
-cleanup_parent() {
-    echo "=> Cleaning up before exiting (parent)..."
+
+
+# lba size=17K
+spart_firstlba='34'
+# start=32K
+spart_idbloader='start=64, size=960, type=8DA63339-0007-60C0-C436-083AC8230908, name="idbloader"'
+# start=512K
+spart_uboot='start=1024, size=6144, type=8DA63339-0007-60C0-C436-083AC8230908, name="uboot"'
+spart_size_all=2048
+spart_off_boot=4
+spart_size_boot=256
+skt_off_boot=spart_off_boot * 2048
+skt_size_boot=spart_size_boot * 2048
+# start=4M size=256M
+spart_boot=f'start={skt_off_boot}, size={skt_size_boot}, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="alarmboot"'
+spart_off_root=spart_off_boot + spart_size_boot
+spart_size_root=spart_size_all - 1 - spart_off_root
+skt_off_root=spart_off_root * 2048
+skt_size_root=spart_size_root * 2048
+# start=(4+256)M=260M size=2048-1-260=1787M end=2048
+spart_root=f'start={skt_off_root}, size={skt_size_root}, type=B921B045-1DF0-41C3-AF44-4C6F280D3FAE, name="alarmroot"'
+
+
+
+OUT_PATH = 'out'
+RKLOADERS_PATH = 'rkloaders'
+MIRROR_ARCHLINUXARM = 'http://mirror.archlinuxarm.org/aarch64/$repo'
+MIRROR_7JI='https://github.com/7Ji/archrepo/releases/download/aarch64'
+
+build_id=f'ArchLinuxARM-aarch64-OrangePi5-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}'
+install_pkgs_bootstrap=('base', 'archlinuxarm-keyring', '7ji-keyring')
+install_pkgs_normal=('vim', 'sudo', 'openssh', 'linux-firmware-orangepi-git', 'usb2host')
+install_pkgs_kernel=('linux-aarch64-orangepi5', 'linux-aarch64-orangepi5-git')
+
+def reap_children():
+    for child in mp.active_children():
+        child.terminate()
+
+def cleanup_parent():
+    print('=> Cleaning up before exiting (parent)...')
     # The root mount only lives inside the child namespace, no need to umount
-    rm -rf cache/root
-    reap_children
-}
+    rmtree(project_path / 'cache' / 'root')
+    reap_children()
 
-cleanup_child() {
-    echo "=> Cleaning up before exiting (child)..."
-    mount proc /proc -t proc -o nosuid,noexec,nodev
-    reap_children -9
-}
+def check_identity_non_root():
+    assert os.getuid() != 0, 'Not allowed to run as UID = 0'
+    assert os.getgid() != 0, 'Not allowed to run as GID = 0'
 
-get_uid_gid() {
-    uid=$(id --user)
-    gid=$(id --group)
-}
+def prepare_host_dirs():
+    rmtree(project_path / 'cache')
+    (project_path / 'cache' / 'root').mkdir(parents=True)
+    (project_path / 'out').mkdir(exist_ok=True)
+    (project_path / 'pkg').mkdir(exist_ok=True)
 
-check_identity_root() {
-    get_uid_gid
-    if [[ "${uid}" != 0 ]]; then
-        echo "ERROR: Must run as root (UID = 0)"
-        exit 1
-    fi
-    if [[ "${gid}" != 0 ]]; then
-        echo "ERROR: Must run as GID = 0"
-        exit 1
-    fi
-}
+def get_rkloaders():
+    with open(project_path / RKLOADERS_PATH / 'sha512sums', 'r') as sums_file:
+        sums_file_lines = sums_file.readlines()
+    sums_file_lines_split = sums_file_lines[0].split(' ')
+    assert sums_file_lines_split[1] == 'list', 'List file checksum not found'
+    with open(project_path / RKLOADERS_PATH / 'list', 'rb') as list_file:
+        assert hashlib.file_digest(list_file, 'sha512').hexdigest() == sums_file_lines_split[0], 'List file checksum wrong'
+    for rkloader_sum_line in sums_file_lines[1:]:
+        rkloader_sum_line_split = rkloader_sum_line.split(' ')
+        with open(project_path / RKLOADERS_PATH / rkloader_sum_line_split[1], 'rb') as rkloader:
+            assert hashlib.file_digest(rkloader, 'sha512').hexdigest() == rkloader_sum_line_split[0], 'Rkloader file checksum wrong'
 
-check_identity_non_root() {
-    get_uid_gid
-    if [[ "${uid}" == 0 ]]; then
-        echo "ERROR: Not allowed to run as root (UID = 0)"
-        exit 1
-    fi
-    if [[ "${gid}" == 0 ]]; then
-        echo "ERROR: Not allowed to run as GID = 0"
-        exit 1
-    fi
-}
-
-config_repos() {
-    mirror_archlinux=${mirror_archlinux:-https://geo.mirror.pkgbuild.com}
-    mirror_archlinuxarm=${mirror_alarm:-http://mirror.archlinuxarm.org}
-    mirror_7Ji=${mirror_7Ji:-https://github.com/7Ji/archrepo/releases/download}
-    # For base system packages
-    repo_url_alarm_aarch64="${mirror_archlinuxarm}"/aarch64/'$repo'
-    # For kernels and other stuffs
-    repo_url_7Ji_aarch64="${mirror_7Ji}"/aarch64
-}
-
-prepare_host_dirs() {
-    rm -rf cache
-    mkdir -p {bin,cache/root,out,pkg}
-}
-
-get_rkloaders() {
-    local sum=$(sed -n 's/\(^[0-9a-f]\{128\}\) \+list$/\1/p' rkloader/sha512sums)
-    if [[ $(sha512sum rkloader/list | cut -d ' ' -f 1) !=  "${sum}" ]]; then
-        echo 'ERROR: list sha512sum not right'
-        false
-    fi
-    # local rkloader model name
-    rkloaders=($(<rkloader/list))
-    for rkloader in "${rkloaders[@]}"; do
-        name="${rkloader##*:}"
-        sum=$(sed -n 's/\(^[0-9a-f]\{128\}\) \+'${name}'$/\1/p' rkloader/sha512sums)
-        if [[ ! ($(sha512sum rkloader/"${name}" | cut -d ' ' -f 1) ==  "${sum}") ]]; then
-            false
-        fi
-    done
-}
-
-prepare_pacman_static() {
+def prepare_pacman_static():
     return 0
-}
 
-prepare_pacman_configs() {
+def prepare_pacman_configs():
     # Create temporary pacman config
-    pacman_config="
+    pacman_config = '''[options]
 RootDir      = cache/root
 DBPath       = cache/root/var/lib/pacman/
 CacheDir     = pkg/
 LogFile      = cache/root/var/log/pacman.log
 GPGDir       = cache/root/etc/pacman.d/gnupg/
 HookDir      = cache/root/etc/pacman.d/hooks/
-Architecture = aarch64"
-    pacman_mirrors="
+Architecture = aarch64
+Siglevel     = {}''' + f'''
 [core]
-Server = ${repo_url_alarm_aarch64}
+Server = {MIRROR_ARCHLINUXARM}
 [extra]
-Server = ${repo_url_alarm_aarch64}
+Server = {MIRROR_ARCHLINUXARM}
 [alarm]
-Server = ${repo_url_alarm_aarch64}
+Server = {MIRROR_ARCHLINUXARM}
 [aur]
-Server = ${repo_url_alarm_aarch64}
+Server = {MIRROR_ARCHLINUXARM}
 [7Ji]
-Server = ${repo_url_7Ji_aarch64}"
+Server = {MIRROR_ARCHLINUXARM}'''
+    with open(project_path / 'cache' / 'pacman-loose.conf', 'w') as file:
+        file.write(pacman_config.format('Never'))
+    with open(project_path / 'cache' / 'pacman-strict.conf', 'w') as file:
+        file.write(pacman_config.format('DatabaseOptional'))
 
-    echo "[options]${pacman_config}
-SigLevel = Never${pacman_mirrors}" > cache/pacman-loose.conf
+def image_disk():
+    output_base_img_path = project_path / OUT_PATH / f'{build_id}-base.img'
+    output_base_img_path.unlink(missing_ok=True)
+    os.truncate(output_base_img_path, spart_size_all * 1024 * 1024)
+    proc = sp.Popen(['sfdisk', output_base_img_path], stdin = sp.PIPE)
+    proc.communicate(f'''label: gpt'
+{spart_boot}
+{spart_root}'''.encode('ascii'))
+    assert proc.wait() == 0
+    assert sp.run(['dd', 'if=cache/boot.img', f'of={output_base_img_path}', 'bs=1M', f'seek={spart_off_boot}', 'conv=notrunc']).returncode == 0
+    assert sp.run(['dd', 'if=cache/root.img', f'of={output_base_img_path}', 'bs=1M', f'seek={spart_off_root}', 'conv=notrunc']).returncode == 0
+    os.sync()
 
-    echo "[options]${pacman_config}
-SigLevel = DatabaseOptional${pacman_mirrors}" > cache/pacman-strict.conf
-}
+def image_rkloader():
+    suffixes = ('root.tar', 'base.img')
+    table = f'''label: gpt
+first-lba: {spart_firstlba}
+{spart_idbloader}
+{spart_uboot}
+{spart_boot}
+{spart_root}'''.encode('ascii')
+    output_base_img_path = project_path / OUT_PATH / f'{build_id}-base.img'
+    # local rkloader model image temp_image suffix fdt kernel pattern_remove_overlay= pattern_set_overlay=
+    pattern_remove_overlay = ''
+    pattern_set_overlay = ''
+    for kernel in install_pkgs_kernel:
+        pattern_remove_overlay+=f';/^\tFDTOVERLAYS\t{kernel}$/d'
+        pattern_set_overlay+=f';s|^\tFDTOVERLAYS\t{kernel}$|\tFDTOVERLAYS\t/dtbs/{kernel}/rockchip/overlay/rk3588-ssd-sata0.dtbo|'
+    with open(project_path / RKLOADERS_PATH / 'list', 'r') as list_file:
+        list_lines = list_file.readlines()
+        for list_line in list_lines:
+            list_line_split = list_line.split(':')
+            if list_line_split[0] != 'vendor':
+                continue
+            model = list_line_split[1]
+            name = list_line_split[2]
+            suffix = f'rkloader-{model}.img'
+            suffixes += (suffix)
+            output_image_path = project_path / OUT_PATH / f'{build_id}-{suffix}'
+            temp_img_path = output_image_path.with_suffix('.temp')
+            copy(output_base_img_path, temp_img_path)
+            assert sp.run(['gzip', '-dk', project_path / RKLOADERS_PATH / name, project_path / 'cache' / name]).returncode == 0
+            assert sp.run(['dd', f'if={project_path / 'cache' / name}', f'of={temp_img_path}', 'conv=notrunc']).returncode == 0
+            (project_path / 'cache' / name).unlink()
+            proc = sp.Popen(['sfdisk', temp_img_path], stdin = sp.PIPE)
+            proc.communicate(table)
+            assert proc.wait() == 0
+            match list_line_split[1].split('_', maxsplit=1)[1]:
+                case '5b':
+                    fdt='rk3588s-orangepi-5b.dtb'
+                case '5_plus':
+                    fdt='rk3588-orangepi-5-plus.dtb'
+                case _:
+                    fdt='rk3588s-orangepi-5.dtb'
+            copy('cache/extlinux.conf', 'cache/extlinux.conf.temp')
+            assert sp.run(['sed', f's|rk3588s-orangepi-5.dtb|{fdt}|', 'cache/extlinux.conf.temp']).returncode == 0
+            if model == '5_sata':
+                assert sp.run(['sed', '-i', pattern_set_overlay, 'cache/extlinux.conf.temp']).returncode == 0
+            else:
+                assert sp.run(['sed', '-i', pattern_remove_overlay, 'cache/extlinux.conf.temp']).returncode == 0
+            assert sp.run(['mcopy', '-oi', 'cache/boot.img', 'cache/extlinux.conf.temp', '::extlinux/extlinux.conf']).returncode == 0
+            os.sync()
+            assert sp.run(['dd', 'if=cache/boot.img', f'of={temp_img_path}', 'bs=1M', 'seek=4', 'conv=notrunc']).returncode == 0
+            temp_img_path.rename(output_image_path)
 
-enable_network() {
-    cat /etc/resolv.conf > cache/resolv.conf
-    mount cache/resolv.conf cache/root/etc/resolv.conf -o bind
-}
-
-disable_network() {
-    umount cache/root/etc/resolv.conf
-}
-
-image_disk() {
-    local image=out/"${build_id}"-base.img
-    local temp_image="${image}".temp
-    rm -f "${temp_image}"
-    truncate -s "${spart_size_all}"M "${temp_image}"
-    echo "label: ${spart_label}
-${spart_boot}
-${spart_root}" | sfdisk "${temp_image}"
-    dd if=cache/boot.img of="${temp_image}" bs=1M seek="${spart_off_boot}" conv=notrunc
-    dd if=cache/root.img of="${temp_image}" bs=1M seek="${spart_off_root}" conv=notrunc
-    sync
-    mv "${temp_image}" "${image}"
-}
-
-image_rkloader() {
-    suffixes=(root.tar base.img)
-    local table="label: ${spart_label}
-first-lba: ${spart_firstlba}
-${spart_idbloader}
-${spart_uboot}
-${spart_boot}
-${spart_root}"
-    local base_image=out/"${build_id}"-base.img
-    local rkloader model image temp_image suffix fdt kernel pattern_remove_overlay= pattern_set_overlay=
-    for kernel in "${install_pkgs_kernel[@]}"; do
-        pattern_remove_overlay+=';/^\tFDTOVERLAYS\t'"${kernel}"'$/d'
-        pattern_set_overlay+=';s|^\tFDTOVERLAYS\t'"${kernel}"'$|\tFDTOVERLAYS\t/dtbs/'"${kernel}"'/rockchip/overlay/rk3588-ssd-sata0.dtbo|'
-    done
-    for rkloader in "${rkloaders[@]}"; do
-        type="${rkloader%%:*}"
-        if [[ ${type} != vendor ]]; then
-            continue
-        fi
-        model="${rkloader%:*}"
-        model="${model#*:}"
-        name="${rkloader##*:}"
-        suffix="rkloader-${model}".img
-        suffixes+=("${suffix}")
-        image=out/"${build_id}"-"${suffix}"
-        temp_image="${image}".temp
-        # Use cp as it could reflink if the fs supports it
-        cp "${base_image}" "${temp_image}"
-        gzip -cdk rkloader/"${name}" | dd of="${temp_image}" conv=notrunc
-        sfdisk "${temp_image}" <<< "${table}"
-        case ${model#orangepi_} in
-        5b)
-            fdt='rk3588s-orangepi-5b.dtb'
-        ;;
-        5_plus)
-            fdt='rk3588-orangepi-5-plus.dtb'
-        ;;
-        *) # 5, 5_sata
-            fdt='rk3588s-orangepi-5.dtb'
-        ;;
-        esac
-        # \n\tFDTOVERLAYS\t/dtbs/linux-aarch64-orangepi5/rockchip/overlay/rk3588-ssd-sata0.dtbo
-        sed 's|rk3588s-orangepi-5.dtb|'"${fdt}"'|' cache/extlinux.conf > cache/extlinux.conf.temp
-        if [[ ${model} == '5_sata' ]]; then
-            sed -i "${pattern_set_overlay}" cache/extlinux.conf.temp
-        else
-            sed -i "${pattern_remove_overlay}" cache/extlinux.conf.temp
-        fi
-        mcopy -oi cache/boot.img cache/extlinux.conf.temp ::extlinux/extlinux.conf
-        sync
-        dd if=cache/boot.img of="${temp_image}" bs=1M seek=4 conv=notrunc
-        mv "${temp_image}" "${image}"
-    done
-}
-
-release() {
-    pids_gzip=()
-    rm -rf out/latest
-    mkdir out/latest
-    for suffix in "${suffixes[@]}"; do
+def release():
+    return 0
+    # rmtree(project_path / OUT_PATH / 'latest')
+    # (project_path / OUT_PATH / 'latest').mkdir()
+    # for suffix in suffixes:
+    #     name = f'{build_id}-{suffix}.gz'
+    #     (project_path / OUT_PATH / 'latest' / name).symlink_to(f'../{name}')
         # gzip -9 out/"${build_id}-${suffix}" &
         # pids_gzip+=($!)
-        ln -s ../"${build_id}-${suffix}".gz out/latest/
-    done
-    echo "Waiting for gzip processes to end..."
-    wait ${pids_gzip[@]}
-}
 
-get_subid() { #1 name #2 uid, #3 type
-    local subid=$(grep '^'"$1"':[0-9]\+:[0-9]\+$' /etc/"$3" | tail -1)
-    if [[ -z "${subid}" ]]; then
-        subid=$(grep '^'"$2"':[0-9]\+:[0-9]\+$' /etc/"$3" | tail -1)
-    fi
-    if [[ -z "${subid}" ]]; then
-        echo "ERROR: failed to get $3 for current user"
-        exit 1
-    fi
-    echo "${subid}"
-}
+def spawn_and_wait():
+    uuid_root = uuid.uuid4()
+    uuid_boot = uuid.uuid4()
+    args = ['unshare', '--user', '--pid', '--mount', '--fork']
+    args.extend(['--map-user=0', '--map-group=0', '--map-users=auto', '--map-groups=auto'])
+    args.extend(['/bin/bash', '-e', './child.sh'])
+    args.extend(['--uuid-root', uuid_root])
+    args.extend(['--uuid-boot', uuid_boot])
+    args.extend(['--build-id', build_id])
+    for arg in install_pkgs_bootstrap:
+        args.extend(['--install-bootstrap', arg])
+    for arg in install_pkgs_normal:
+        args.extend(['--install', arg])
+    for arg in install_pkgs_kernel:
+        args.extend(['--install-kernel', arg])
+    sp.run(args)
 
-spawn_and_wait() {
-    local username=$(id --user --name)
-    if [[ -z "${username}" ]]; then
-        echo 'ERROR: Failed to get user name of current user'
-        exit 1
-    fi
-    local subuid=$(get_subid "${username}" "${uid}" subuid)
-    local subgid=$(get_subid "${username}" "${uid}" subgid)
-    local uid_range="${subuid##*:}"
-    # We need to map the user to 0:0, and others to 1:65535
-    if [[ "${uid_range}" -lt 65535 ]]; then
-        echo 'ERROR: subuid range too short'
-        exit 1
-    fi
-    local gid_range="${subgid##*:}"
-    if [[ "${gid_range}" -lt 65535 ]]; then
-        echo 'ERROR: subgid range too short'
-        exit 1
-    fi
-    local uid_start="${subuid#*:}"
-    uid_start="${uid_start%:*}"
-    local gid_start="${subgid#*:}"
-    gid_start="${gid_start%:*}"
-    
-    local args=()
-    local arg=
-    for arg in "${install_pkgs_bootstrap[@]}"; do
-        args+=(--install-bootstrap "$arg")
-    done
-    for arg in "${install_pkgs_normal[@]}"; do
-        args+=(--install "$arg")
-    done
-    for arg in "${install_pkgs_kernel[@]}"; do
-        args+=(--install-kernel "$arg")
-    done
-    # Note: the options --map-users and --map-groups were added to unshare.1 in 
-    # util-linux 2.38, which was released on Mar 28, 2022. But the main distro
-    # I aim, Ubuntu 22.04, which is what Github Actions use, packs an older
-    # util-linux 2.37, which does not have those arguments. So we have to work
-    # around this by calling newuidmap and newgidmap directly.
-    unshare --user --pid --mount --fork \
-        /bin/bash -e "${arg0}" --role child --uuid-root "${uuid_root}" --uuid-boot "${uuid_boot}" --build-id "${build_id}"  "${args[@]}" &
-    pid_child="$!"
-    newuidmap "${pid_child}" 0 "${uid}" 1 1 "${uid_start}" 65535
-    newgidmap "${pid_child}" 0 "${gid}" 1 1 "${gid_start}" 65535
-    wait "${pid_child}"
-    pid_child=
-}
+def set_parts():
+    return 0
 
-set_parts() {
-    spart_label='gpt'
-    # lba size=17K
-    spart_firstlba='34'
-    # start=32K
-    spart_idbloader='start=64, size=960, type=8DA63339-0007-60C0-C436-083AC8230908, name="idbloader"'
-    # start=512K
-    spart_uboot='start=1024, size=6144, type=8DA63339-0007-60C0-C436-083AC8230908, name="uboot"'
-    spart_size_all=2048
-    spart_off_boot=4
-    spart_size_boot=256
-    local skt_off_boot=$(( ${spart_off_boot} * 2048 ))
-    local skt_size_boot=$(( ${spart_size_boot} * 2048 ))
-    # start=4M size=256M
-    spart_boot='start='"${skt_off_boot}"', size='"${skt_size_boot}"', type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="alarmboot"'
-    spart_off_root=$(( ${spart_off_boot} + ${spart_size_boot} ))
-    spart_size_root=$((  ${spart_size_all} - 1 - ${spart_off_root} ))
-    local skt_off_root=$(( ${spart_off_root} * 2048 ))
-    local skt_size_root=$(( ${spart_size_root} * 2048 ))
-    # start=(4+256)M=260M size=2048-1-260=1787M end=2048
-    spart_root='start='"${skt_off_root}"', size='"${skt_size_root}"', type=B921B045-1DF0-41C3-AF44-4C6F280D3FAE, name="alarmroot"'
-}
+def prepare_host():
+    prepare_host_dirs()
+    get_rkloaders()
+    prepare_pacman_static()
+    prepare_pacman_configs()
 
-prepare_host() {
-    prepare_host_dirs
-    get_rkloaders
-    config_repos
-    prepare_pacman_static
-    prepare_pacman_configs
-}
+def cleanup_cache():
+    rmtree(project_path / 'cache')
 
-cleanup_cache() {
-    rm -rf cache
-}
+def main():
+    try:
+        global project_path
+        project_path = Path(__file__).parent
+        signal.signal(signal.SIGINT, cleanup_parent)
+        check_identity_non_root()
+        prepare_host()
+        spawn_and_wait()
+        # The child should have prepared the following artifacts: cache/root.img cache/boot.img cache/extlinux.conf
+        # And the child should have already finished out/*-root.tar
+        set_parts()
+        image_disk()
+        image_rkloader()
+        release()
+        cleanup_cache()
+    finally:
+        cleanup_parent()
 
-work_parent() {
-    trap "cleanup_parent" INT TERM EXIT
-    check_identity_non_root
-    prepare_host
-    spawn_and_wait
-    # The child should have prepared the following artifacts: cache/root.img cache/boot.img cache/extlinux.conf
-    # And the child should have already finished out/*-root.tar
-    set_parts
-    image_disk
-    image_rkloader
-    release
-    cleanup_cache
-}
-
-build_id=ArchLinuxARM-aarch64-OrangePi5-$(date +%Y%m%d_%H%M%S)
-install_pkgs_bootstrap=(base archlinuxarm-keyring 7ji-keyring)
-install_pkgs_normal=(vim nano sudo openssh linux-firmware-orangepi-git usb2host)
-install_pkgs_kernel=(linux-aarch64-orangepi5{,-git})
-uuid_root=$(uuidgen)
-uuid_boot=$(uuidgen)
-
-work_parent
+if __name__ == '__main__':
+    main()
