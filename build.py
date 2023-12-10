@@ -109,7 +109,8 @@ def build_common(type, config, binaries):
                           env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
                                'BL31':binaries['BL31'].as_posix(), 
                                'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
-                               'ARCH':'arm64', 'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
+                               'ARCH':'arm64', 
+                               'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
             with open(output_archive_path, 'wb') as file:
                 file.truncate(17 * 1024 * 1024)
             proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
