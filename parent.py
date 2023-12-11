@@ -142,12 +142,9 @@ first-lba: {spart_firstlba}
                 continue
             output_image_path = project_path / OUT_PATH / f'{build_id}_rkloader-{rkloader_config}.img'
             shutil.copy(base_image_path, output_image_path)
-            # with gzip.open(rkloader_image_path, 'rb') as rkloader:
-            #     with open(output_image_path, 'r+b') as output_image:
-            #         shutil.copyfileobj(rkloader, output_image)
-            # assert sp.run(['gzip', '-dk', rkloader_image_path]).returncode == 0
-            assert sp.run(['dd', f'if={rkloader_image_path}', f'of={output_image_path}', 'conv=notrunc']).returncode == 0
-            # rkloader_image_path.with_suffix('').unlink()
+            with gzip.open(rkloader_image_path, 'rb') as rkloader:
+                with open(output_image_path, 'r+b') as output_image:
+                    shutil.copyfileobj(rkloader, output_image)
             proc = sp.Popen(['sfdisk', output_image_path], stdin = sp.PIPE)
             proc.communicate(table)
             assert proc.wait() == 0
@@ -200,7 +197,7 @@ def set_parts():
 
 def prepare_host():
     prepare_host_dirs()
-    check_rkloaders()
+    # check_rkloaders()
     prepare_pacman_static()
     prepare_pacman_configs()
 
