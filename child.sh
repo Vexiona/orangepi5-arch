@@ -211,6 +211,7 @@ archive_root() {
 
 set_parts() {
     spart_size_all=2048
+    spart_off_boot=4
     spart_size_boot=256
     spart_off_root=$(( ${spart_off_boot} + ${spart_size_boot} ))
     spart_size_root=$((  ${spart_size_all} - 1 - ${spart_off_root} ))

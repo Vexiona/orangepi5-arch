@@ -2,9 +2,11 @@ import subprocess as sp
 import os
 from git import Repo
 from pathlib import Path
-from shutil import rmtree, copy
+from shutil import rmtree
+import shutil
 import hashlib
 import tarfile
+import gzip
 import multiprocessing as mp
 import signal
 import datetime
@@ -40,20 +42,16 @@ RKLOADERS_PATH = 'rkloaders'
 MIRROR_ARCHLINUXARM = 'http://mirror.archlinuxarm.org/aarch64/$repo'
 MIRROR_7JI='https://github.com/7Ji/archrepo/releases/download/aarch64'
 
-build_id=f'ArchLinuxARM-aarch64-OrangePi5-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}'
+build_id=f'ArchLinuxARM_aarch64_OrangePi5_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}'
 install_pkgs_bootstrap=('base', 'archlinuxarm-keyring', '7ji-keyring')
 install_pkgs_normal=('vim', 'sudo', 'openssh', 'linux-firmware-orangepi-git', 'usb2host')
 install_pkgs_kernel=('linux-aarch64-orangepi5', 'linux-aarch64-orangepi5-git')
 
-def reap_children():
-    for child in mp.active_children():
-        child.terminate()
-
 def cleanup_parent():
     print('=> Cleaning up before exiting (parent)...')
-    # The root mount only lives inside the child namespace, no need to umount
     rmtree(project_path / 'cache' / 'root')
-    reap_children()
+    for child in mp.active_children():
+        child.terminate()
 
 def check_identity_non_root():
     assert os.getuid() != 0, 'Not allowed to run as UID = 0'
@@ -65,7 +63,7 @@ def prepare_host_dirs():
     (project_path / 'out').mkdir(exist_ok=True)
     (project_path / 'pkg').mkdir(exist_ok=True)
 
-def get_rkloaders():
+def check_rkloaders():
     with open(project_path / RKLOADERS_PATH / 'sha512sums', 'r') as sums_file:
         sums_file_lines = sums_file.read().splitlines()
     sums_file_lines_split = sums_file_lines[0].split(' ')
@@ -121,15 +119,13 @@ def image_disk():
     os.sync()
 
 def image_rkloader():
-    suffixes = ('root.tar', 'base.img')
     table = f'''label: gpt
 first-lba: {spart_firstlba}
 {spart_idbloader}
 {spart_uboot}
 {spart_boot}
 {spart_root}'''.encode('ascii')
-    output_base_img_path = project_path / OUT_PATH / f'{build_id}-base.img'
-    # local rkloader model image temp_image suffix fdt kernel pattern_remove_overlay= pattern_set_overlay=
+    base_image_path = project_path / OUT_PATH / f'{build_id}-base.img'
     pattern_remove_overlay = ''
     pattern_set_overlay = ''
     for kernel in install_pkgs_kernel:
@@ -139,45 +135,44 @@ first-lba: {spart_firstlba}
         list_lines = list_file.read().splitlines()
         for list_line in list_lines:
             list_line_split = list_line.split(':')
-            if list_line_split[0] != 'vendor':
+            rkloader_type = list_line_split[0]
+            rkloader_config = list_line_split[1]
+            rkloader_image_path = project_path / RKLOADERS_PATH / list_line_split[2]
+            if rkloader_type != 'vendor':
                 continue
-            model = list_line_split[1]
-            name = list_line_split[2]
-            rkloader_path = project_path / RKLOADERS_PATH / name
-            suffix = f'rkloader-{model}.img'
-            suffixes += (suffix, )
-            output_image_path = project_path / OUT_PATH / f'{build_id}-{suffix}'
-            temp_img_path = output_image_path.with_suffix('.temp')
-            copy(output_base_img_path, temp_img_path)
-            assert sp.run(['gzip', '-dk', rkloader_path]).returncode == 0
-            assert sp.run(['dd', f'if={rkloader_path}', f'of={temp_img_path}', 'conv=notrunc']).returncode == 0
-            (rkloader_path.with_suffix('')).unlink()
-            proc = sp.Popen(['sfdisk', temp_img_path], stdin = sp.PIPE)
+            output_image_path = project_path / OUT_PATH / f'{build_id}_rkloader-{rkloader_config}.img'
+            shutil.copy(base_image_path, output_image_path)
+            # with gzip.open(rkloader_image_path, 'rb') as rkloader:
+            #     with open(output_image_path, 'r+b') as output_image:
+            #         shutil.copyfileobj(rkloader, output_image)
+            # assert sp.run(['gzip', '-dk', rkloader_image_path]).returncode == 0
+            assert sp.run(['dd', f'if={rkloader_image_path}', f'of={output_image_path}', 'conv=notrunc']).returncode == 0
+            # rkloader_image_path.with_suffix('').unlink()
+            proc = sp.Popen(['sfdisk', output_image_path], stdin = sp.PIPE)
             proc.communicate(table)
             assert proc.wait() == 0
-            match list_line_split[1].split('_', maxsplit=1)[1]:
+            match rkloader_config.split('_', maxsplit=1)[1]:
                 case '5b':
                     fdt='rk3588s-orangepi-5b.dtb'
                 case '5_plus':
                     fdt='rk3588-orangepi-5-plus.dtb'
                 case _:
                     fdt='rk3588s-orangepi-5.dtb'
-            copy('cache/extlinux.conf', 'cache/extlinux.conf.temp')
-            assert sp.run(['sed', f's|rk3588s-orangepi-5.dtb|{fdt}|', 'cache/extlinux.conf.temp']).returncode == 0
-            if model == '5_sata':
+            shutil.copy('cache/extlinux.conf', 'cache/extlinux.conf.temp')
+            assert sp.run(['sed', '-i', f's|rk3588s-orangepi-5.dtb|{fdt}|', 'cache/extlinux.conf.temp']).returncode == 0
+            if rkloader_config == '5_sata':
                 assert sp.run(['sed', '-i', pattern_set_overlay, 'cache/extlinux.conf.temp']).returncode == 0
             else:
                 assert sp.run(['sed', '-i', pattern_remove_overlay, 'cache/extlinux.conf.temp']).returncode == 0
             assert sp.run(['mcopy', '-oi', 'cache/boot.img', 'cache/extlinux.conf.temp', '::extlinux/extlinux.conf']).returncode == 0
             os.sync()
-            assert sp.run(['dd', 'if=cache/boot.img', f'of={temp_img_path}', 'bs=1M', 'seek=4', 'conv=notrunc']).returncode == 0
-            temp_img_path.rename(output_image_path)
+            assert sp.run(['dd', 'if=cache/boot.img', f'of={output_image_path}', 'bs=1M', 'seek=4', 'conv=notrunc']).returncode == 0
 
 def release():
     return 0
     # rmtree(project_path / OUT_PATH / 'latest')
     # (project_path / OUT_PATH / 'latest').mkdir()
-    # for suffix in suffixes:
+    # for suffix in suffixes:``
     #     name = f'{build_id}-{suffix}.gz'
     #     (project_path / OUT_PATH / 'latest' / name).symlink_to(f'../{name}')
         # gzip -9 out/"${build_id}-${suffix}" &
@@ -205,7 +200,7 @@ def set_parts():
 
 def prepare_host():
     prepare_host_dirs()
-    get_rkloaders()
+    check_rkloaders()
     prepare_pacman_static()
     prepare_pacman_configs()
 
@@ -216,7 +211,7 @@ def main():
     # try:
         global project_path
         project_path = Path(__file__).parent
-        # signal.signal(signal.SIGINT, cleanup_parent)
+        signal.signal(signal.SIGINT, cleanup_parent)
         check_identity_non_root()
         prepare_host()
         spawn_and_wait()

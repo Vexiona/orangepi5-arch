@@ -72,21 +72,22 @@ def prepare_rkbin():
 def build_common(type, config, binaries):
     uboot_repo_name = f'u-boot-{type}'
     branch = REPOS[uboot_repo_name]['branch']
-    output_archive_name = f"rkloader_{type}_{branch}_{config}"
-    output_archive_name += '_bl31_' + binaries['BL31'].stem.split('_')[-1]
-    output_archive_name += '_ddr_' + binaries['DDR'].stem.split('_')[-1]
-    output_archive_path = project_path / RKLOADERS_PATH / f'{output_archive_name}.img'
+    output_image_name = f"rkloader_{type}_{branch}_{config}"
+    output_image_name += '_bl31_' + binaries['BL31'].stem.split('_')[-1]
+    output_image_name += '_ddr_' + binaries['DDR'].stem.split('_')[-1]
+    output_image_path = project_path / RKLOADERS_PATH / f'{output_image_name}.img.gz'
     report_name=f'u-boot ({type}) for {config}'
     with open(project_path / RKLOADERS_PATH / 'list', 'a') as f:
-        f.write(f"{type}:{config}:{output_archive_name}.img.gz\n")
-    if (project_path / RKLOADERS_PATH / f'{output_archive_name}.img.gz').is_file():
+        f.write(f'{type}:{config}:{output_image_path.name}\n')
+    if output_image_path.is_file():
         print(f'Skipped building {report_name}')
         return
     Repo(project_path / f'{uboot_repo_name}.git').clone(project_path / 'build', depth=1, branch=branch)
     print(f'Configuring {report_name}')
     assert sp.run(['make', '-C', 'build', f'{config}_defconfig']).returncode == 0
     print(f'Building {report_name}')
-    output_archive_path.unlink(missing_ok=True)
+    output_image_raw_path = output_image_path.with_suffix('')
+    output_image_raw_path.unlink(missing_ok=True)
     match type:
         case 'vendor':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
@@ -97,13 +98,13 @@ def build_common(type, config, binaries):
             assert sp.run(['build/tools/mkimage', '-n', 'rk3588', '-T', 'rksd', 
                            '-d', binaries['DDR'].as_posix() + ":build/spl/u-boot-spl.bin",
                            'build/idbloader.img'])
-            with open(output_archive_path, 'wb') as file:
+            with open(output_image_raw_path, 'wb') as file:
                 file.truncate(4 * 1024 * 1024)
-            proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
+            proc = sp.Popen(['sfdisk', output_image_raw_path], stdin = sp.PIPE)
             proc.communicate(REPOS[uboot_repo_name]['gpt'])
             assert proc.wait() == 0
-            assert sp.run(['dd', 'if=build/idbloader.img', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
-            assert sp.run(['dd', 'if=build/u-boot.itb', f'of={output_archive_path}', 'seek=1024', 'conv=notrunc']).returncode == 0
+            assert sp.run(['dd', 'if=build/idbloader.img', f'of={output_image_raw_path}', 'seek=64', 'conv=notrunc']).returncode == 0
+            assert sp.run(['dd', 'if=build/u-boot.itb', f'of={output_image_raw_path}', 'seek=1024', 'conv=notrunc']).returncode == 0
         case 'mainline':
             assert sp.run(['/usr/bin/make', '-C', 'build', '-j', str(os.cpu_count())], 
                           env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
@@ -111,14 +112,14 @@ def build_common(type, config, binaries):
                                'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
                                'ARCH':'arm64', 
                                'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
-            with open(output_archive_path, 'wb') as file:
+            with open(output_image_raw_path, 'wb') as file:
                 file.truncate(17 * 1024 * 1024)
-            proc = sp.Popen(['sfdisk', output_archive_path], stdin = sp.PIPE)
+            proc = sp.Popen(['sfdisk', output_image_raw_path], stdin = sp.PIPE)
             proc.communicate(REPOS[uboot_repo_name]['gpt'])
             assert proc.wait() == 0
-            assert sp.run(['dd', 'if=build/u-boot-rockchip.bin', f'of={output_archive_path}', 'seek=64', 'conv=notrunc']).returncode == 0
+            assert sp.run(['dd', 'if=build/u-boot-rockchip.bin', f'of={output_image_raw_path}', 'seek=64', 'conv=notrunc']).returncode == 0
             
-    assert sp.run(['gzip', '-9', '--force', '--suffix', '.gz', output_archive_path]).returncode == 0
+    assert sp.run(['gzip', '-9', output_image_raw_path]).returncode == 0
     rmtree(project_path / 'build')
 
 def build_all():
