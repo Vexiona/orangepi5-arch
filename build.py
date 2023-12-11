@@ -60,7 +60,7 @@ def deploy_toolchain():
     (project_path / 'toolchain.temp').mkdir()
     assert sp.run(['wget', f'{TOOLCHAIN_URL}{TOOLCHAIN_NAME}.tar.xz', '-O', 'toolchain.tar.xz']).returncode == 0
     with tarfile.open('toolchain.tar.xz', 'r:xz') as toolchain:
-        toolchain.extractall(project_path / 'toolchain.temp', filter='data')
+        toolchain.extractall(project_path / 'toolchain.temp')
     (project_path / 'toolchain.tar.xz').unlink()
     (project_path / 'toolchain.temp' / TOOLCHAIN_NAME).rename(project_path / 'toolchain')
     (project_path / 'toolchain.temp').rmdir()
@@ -91,7 +91,7 @@ def build_common(type, config, binaries):
     match type:
         case 'vendor':
             assert sp.run(['make', '-C', 'build', '-j', str(os.cpu_count()), 'spl/u-boot-spl.bin', 'u-boot.dtb', 'u-boot.itb'], 
-                          env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
+                          env={'PATH':f"{os.environ['PATH']}:{Path('toolchain/bin').resolve()}",
                                'BL31':binaries['BL31'].as_posix(),
                                'ARCH':'arm64', 
                                'CROSS_COMPILE':'aarch64-linux-gnu-'}).returncode == 0
@@ -107,7 +107,7 @@ def build_common(type, config, binaries):
             assert sp.run(['dd', 'if=build/u-boot.itb', f'of={output_image_raw_path}', 'seek=1024', 'conv=notrunc']).returncode == 0
         case 'mainline':
             assert sp.run(['/usr/bin/make', '-C', 'build', '-j', str(os.cpu_count())], 
-                          env={'PATH':f'{os.environ['PATH']}:{Path('toolchain/bin').resolve()}',
+                          env={'PATH':f"{os.environ['PATH']}:{Path('toolchain/bin').resolve()}",
                                'BL31':binaries['BL31'].as_posix(), 
                                'ROCKCHIP_TPL':binaries['DDR'].as_posix(),
                                'ARCH':'arm64', 
