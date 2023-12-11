@@ -197,7 +197,7 @@ def set_parts():
 
 def prepare_host():
     prepare_host_dirs()
-    # check_rkloaders()
+    check_rkloaders()
     prepare_pacman_static()
     prepare_pacman_configs()
 
