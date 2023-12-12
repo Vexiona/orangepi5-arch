@@ -1,11 +1,9 @@
 import subprocess as sp
 import os
-from git import Repo
 from pathlib import Path
 from shutil import rmtree
 import shutil
 import hashlib
-import tarfile
 import gzip
 import multiprocessing as mp
 import signal
