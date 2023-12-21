@@ -8,8 +8,8 @@ The above code is a combination of [7Ji/orangepi5-archlinuxarm](https://github.c
 
 ## Dependencies
 
-- python2 ()
-- python3
+- python2
+- python3.12 (anything less will not work)
   - setuptools
   - pyelftools
   - gitpython
