@@ -30,7 +30,7 @@ spart_off_root=spart_off_boot + spart_size_boot
 spart_size_root=spart_size_all - 1 - spart_off_root
 skt_off_root=spart_off_root * 2048
 skt_size_root=spart_size_root * 2048
-# start=(4+256)M=260M size=2048-1-260=1787M end=2048
+# start=(4+256)M=260M size=2048-1-260=1787M end=2048M
 spart_root=f'start={skt_off_root}, size={skt_size_root}, type=B921B045-1DF0-41C3-AF44-4C6F280D3FAE, name="alarmroot"'
 
 
@@ -38,10 +38,11 @@ spart_root=f'start={skt_off_root}, size={skt_size_root}, type=B921B045-1DF0-41C3
 OUT_PATH = 'out'
 RKLOADERS_PATH = 'rkloaders'
 MIRROR_ARCHLINUXARM = 'http://mirror.archlinuxarm.org/aarch64/$repo'
+MIRROR_VEXIONA='https://github.com/Vexiona/archrepo/releases/download/aarch64'
 MIRROR_7JI='https://github.com/7Ji/archrepo/releases/download/aarch64'
 
 build_id=f'ArchLinuxARM_aarch64_OrangePi5_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}'
-install_pkgs_bootstrap=('base', 'archlinuxarm-keyring', '7ji-keyring')
+install_pkgs_bootstrap=('base', 'archlinuxarm-keyring', 'Vexiona-keyring', '7ji-keyring')
 install_pkgs_normal=('vim', 'sudo', 'openssh', 'linux-firmware-orangepi-git', 'usb2host')
 install_pkgs_kernel=('linux-aarch64-orangepi5', 'linux-aarch64-orangepi5-git')
 
@@ -95,6 +96,8 @@ Server = {MIRROR_ARCHLINUXARM}
 Server = {MIRROR_ARCHLINUXARM}
 [aur]
 Server = {MIRROR_ARCHLINUXARM}
+[Vexiona]
+Server = {MIRROR_VEXIONA}
 [7Ji]
 Server = {MIRROR_7JI}'''
     with open(project_path / 'cache' / 'pacman-loose.conf', 'w') as file:
@@ -178,7 +181,7 @@ def spawn_and_wait():
     uuid_boot = uuid.uuid4()
     args = ['unshare', '--user', '--pid', '--mount', '--fork']
     args.extend(['--map-user=0', '--map-group=0', '--map-users=auto', '--map-groups=auto'])
-    args.extend(['/bin/bash', '-e', './child.sh'])
+    args.extend(['/bin/bash', '-e', './build-arch-child.sh'])
     args.extend(['--uuid-root', str(uuid_root)])
     args.extend(['--uuid-boot', str(uuid_boot)])
     args.extend(['--build-id', build_id])
