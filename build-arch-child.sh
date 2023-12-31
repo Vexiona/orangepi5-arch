@@ -73,10 +73,10 @@ disable_network() {
 
 bootstrap_root() {
     bin/pacman -Sy --config cache/pacman-loose.conf --noconfirm "${install_pkgs_bootstrap[@]}"
-    echo '[7Ji]
-Server = https://github.com/7Ji/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
     echo '[Vexiona]
 Server = https://github.com/Vexiona/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
+    echo '[7Ji]
+Server = https://github.com/7Ji/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
     enable_network
     rm -rf cache/root/etc/pacman.d/gnupg
     # GnuPG > 2.4.3-2 does not like SHA1 only key, which is what ALARM Builder uses
