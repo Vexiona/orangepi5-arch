@@ -43,8 +43,8 @@ MIRROR_7JI='https://github.com/7Ji/archrepo/releases/download/aarch64'
 
 build_id=f'ArchLinuxARM_aarch64_OrangePi5_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}'
 install_pkgs_bootstrap=('base', 'archlinuxarm-keyring', 'Vexiona-keyring', '7ji-keyring')
-install_pkgs_normal=('vim', 'sudo', 'openssh', 'linux-firmware-orangepi-git', 'usb2host')
-install_pkgs_kernel=('linux-aarch64-orangepi5', 'linux-aarch64-orangepi5-git')
+install_pkgs_normal=('vim', 'sudo', 'openssh', 'linux-firmware-orangepi-git', 'usb2host', 'python')
+install_pkgs_kernel=('linux-aarch64-armbian-orangepi5-plus',)
 
 def cleanup_parent():
     print('=> Cleaning up before exiting (parent)...')
