@@ -59,7 +59,9 @@ def check_identity_non_root():
 def prepare_host_dirs():
     rmtree(project_path / 'cache', ignore_errors=True)
     (project_path / 'cache' / 'root').mkdir(parents=True)
-    (project_path / 'out').mkdir(exist_ok=True)
+    (project_path / OUT_PATH).mkdir(exist_ok=True)
+    rmtree(project_path / OUT_PATH / 'latest', ignore_errors=True)
+    (project_path / OUT_PATH / 'latest').mkdir()
     (project_path / 'pkg').mkdir(exist_ok=True)
 
 def check_rkloaders():
@@ -142,6 +144,7 @@ first-lba: {spart_firstlba}
             if rkloader_type != 'vendor':
                 continue
             output_image_path = project_path / OUT_PATH / f'{build_id}_rkloader-{rkloader_config}.img'
+            out_images.append(output_image_path)
             shutil.copy(base_image_path, output_image_path)
             with gzip.open(rkloader_image_path, 'rb') as rkloader:
                 with open(output_image_path, 'r+b') as output_image:
@@ -167,14 +170,12 @@ first-lba: {spart_firstlba}
             assert sp.run(['dd', 'if=cache/boot.img', f'of={output_image_path}', 'bs=1M', 'seek=4', 'conv=notrunc']).returncode == 0
 
 def release():
-    return 0
-    # rmtree(project_path / OUT_PATH / 'latest')
-    # (project_path / OUT_PATH / 'latest').mkdir()
-    # for suffix in suffixes:``
-    #     name = f'{build_id}-{suffix}.gz'
-    #     (project_path / OUT_PATH / 'latest' / name).symlink_to(f'../{name}')
-        # gzip -9 out/"${build_id}-${suffix}" &
-        # pids_gzip+=($!)
+    for image_path in out_images:
+        print(f'Compressing {image_path.name}')
+        # (project_path / OUT_PATH / 'latest' / name).symlink_to(f'../{name}')
+        with open(image_path, 'rb') as image:
+            with gzip.open(project_path / OUT_PATH / 'latest' / (image_path.name + '.gz'), 'wb') as output_image:
+                shutil.copyfileobj(image, output_image)
 
 def spawn_and_wait():
     uuid_root = uuid.uuid4()
@@ -209,6 +210,8 @@ def main():
     # try:
         global project_path
         project_path = Path(__file__).parent
+        global out_images
+        out_images = []
         signal.signal(signal.SIGINT, cleanup_parent)
         check_identity_non_root()
         prepare_host()
