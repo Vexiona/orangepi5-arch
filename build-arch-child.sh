@@ -73,7 +73,7 @@ disable_network() {
 
 bootstrap_root() {
     bin/pacman -Sy --config cache/pacman-loose.conf --noconfirm "${install_pkgs_bootstrap[@]}"
-    echo '[Vexiona]
+    echo '[Vexiona-aarch64]
 Server = https://github.com/Vexiona/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
     echo '[7Ji]
 Server = https://github.com/7Ji/archrepo/releases/download/$arch' >> cache/root/etc/pacman.conf
