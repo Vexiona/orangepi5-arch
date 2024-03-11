@@ -96,7 +96,7 @@ Server = {MIRROR_ARCHLINUXARM}
 Server = {MIRROR_ARCHLINUXARM}
 [aur]
 Server = {MIRROR_ARCHLINUXARM}
-[Vexiona]
+[Vexiona-aarch64]
 Server = {MIRROR_VEXIONA}
 [7Ji]
 Server = {MIRROR_7JI}'''
